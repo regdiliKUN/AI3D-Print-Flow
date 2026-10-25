@@ -53,14 +53,31 @@ try {
   if (-not $info.version) { throw 'PACKAGE_INFO.json has no version.' }
   if ([string]$info.entry -ne 'AI3D-Print-Flow.exe') { throw 'PACKAGE_INFO.json entry must be AI3D-Print-Flow.exe.' }
   $launcherExe = Join-Path $stage 'AI3D-Print-Flow.exe'
-  $launcherVersion = (& $launcherExe --version 2>&1 | Out-String).Trim()
-  if ($LASTEXITCODE -ne 0) { throw "Packaged launcher --version failed: $launcherVersion" }
-  if ($launcherVersion -ne [string]$info.version) {
-    throw "Packaged launcher version '$launcherVersion' does not match manifest $($info.version)."
-  }
   $nodeExe = Join-Path $stage 'runtime\node.exe'
-  $nodeCheck = & $nodeExe --check (Join-Path $stage 'app\server.mjs') 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "runtime node --check failed: $nodeCheck" }
+  # PowerShell 5.1 turns anything a native command writes to stderr into an
+  # ErrorRecord, and $ErrorActionPreference='Stop' aborts on it even when the
+  # command succeeded - so the old `& $exe --version 2>&1` form died with a bare
+  # NativeCommandError. Relax the preference around the probes, and pull the
+  # version out of stdout rather than trusting the whole captured text.
+  # Keep the console attached (do not use CreateNoWindow): node.exe asserts in
+  # ncrypto::CSPRNG when it is started without one.
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $launcherOut = (& $launcherExe --version 2>&1 | Out-String)
+    $launcherExit = $LASTEXITCODE
+    $nodeCheckOut = (& $nodeExe --check (Join-Path $stage 'app\server.mjs') 2>&1 | Out-String)
+    $nodeCheckExit = $LASTEXITCODE
+  }
+  finally { $ErrorActionPreference = $prevEap }
+
+  if ($launcherExit -ne 0) { throw "Packaged launcher --version failed (code $launcherExit): $launcherOut" }
+  $versionMatch = [regex]::Match($launcherOut, '\d+\.\d+\.\d+')
+  if (-not $versionMatch.Success) { throw "Packaged launcher did not report a version: $launcherOut" }
+  if ($versionMatch.Value -ne [string]$info.version) {
+    throw "Packaged launcher version '$($versionMatch.Value)' does not match manifest $($info.version)."
+  }
+  if ($nodeCheckExit -ne 0) { throw "runtime node --check failed: $nodeCheckOut" }
 
   $hashFile = "$ZipPath.sha256"
   if (Test-Path -LiteralPath $hashFile) {

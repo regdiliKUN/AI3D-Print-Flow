@@ -59,7 +59,8 @@ try {
     (Join-Path $root 'workflows'),
     (Join-Path $root '.git'),
     (Join-Path $root 'node_modules'),
-    (Join-Path $root '.vscode')
+    (Join-Path $root '.vscode'),
+    (Join-Path $root 'release')
   )
   $excludeFiles = @(
     'config.json',
@@ -112,17 +113,33 @@ try {
   if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 
   Write-Host "Compressing to $zip ..." -ForegroundColor Cyan
-  # 不要用 tar.exe：Windows 版 bsdtar 按当前 ANSI 代码页写入条目名，又不设置
-  # ZIP 的 UTF-8 标志位，结果 docs\部署指南.md 这类中文名在任何非 GBK 系统上
-  # 都会变成乱码（v1.5.0 的包就有这个问题）。ZipFile 用 UTF-8 写文件名并置位，
-  # 同时仍会为空的 workspace / logs / workflows 目录写入目录条目。
-  Add-Type -AssemblyName System.IO.Compression.FileSystem
-  [IO.Compression.ZipFile]::CreateFromDirectory(
-    $stage,
-    $zip,
-    [IO.Compression.CompressionLevel]::Optimal,
-    $false
-  )
+  # Do not use tar.exe here. Windows bsdtar writes entry names in the active ANSI
+  # code page and never sets the ZIP UTF-8 flag, so non-ASCII names such as the
+  # Chinese doc file names come out as mojibake on non-GBK systems (the v1.5.0
+  # package had this bug). 7-Zip with -mcu writes UTF-8 names with the flag set
+  # and still records the empty workspace / logs / workflows directory entries.
+  $sevenZip = $null
+  $sevenZipRoots = @($env:ProgramFiles, [Environment]::GetEnvironmentVariable('ProgramFiles(x86)'))
+  foreach ($base in $sevenZipRoots) {
+    if (-not $base) { continue }
+    $candidate = Join-Path $base '7-Zip\7z.exe'
+    if (Test-Path -LiteralPath $candidate) { $sevenZip = $candidate; break }
+  }
+  if (-not $sevenZip) {
+    $sevenZip = (Get-Command '7z.exe' -ErrorAction SilentlyContinue).Source
+  }
+  if ($sevenZip) {
+    Push-Location -LiteralPath $stage
+    try {
+      & $sevenZip a -tzip -mx=5 -mcu=on -bso0 -bsp0 $zip . | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "7-Zip failed with code $LASTEXITCODE" }
+    }
+    finally { Pop-Location }
+  } else {
+    Write-Warning '7-Zip not found; falling back to tar.exe. Non-ASCII file names may be unreadable on non-GBK systems.'
+    & tar.exe -a -c -f $zip -C $stage .
+    if ($LASTEXITCODE -ne 0) { throw "tar failed with code $LASTEXITCODE" }
+  }
 
   $hash = Get-FileHash -LiteralPath $zip -Algorithm SHA256
   $hashFile = "$zip.sha256"

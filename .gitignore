@@ -23,6 +23,9 @@ AI3D-Print-Flow.exe
 launcher/bin/
 launcher/obj/
 
+# 发布产物：走 GitHub Releases，不进仓库
+release/
+
 # 内置 Node 运行时：约 90 MB 二进制，由打包流程放置，
 # 不进仓库（GitHub 单文件上限 100 MB，且会让 clone 变得很慢）
 runtime/
