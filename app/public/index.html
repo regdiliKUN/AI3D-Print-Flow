@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI3D Print Flow · 从图片到可打印 STL</title>
+  <!--
+    No `?v=` cache-busting query here: static JS/CSS are served with
+    `Cache-Control: no-cache` plus a content ETag, so a revalidation already
+    picks up a new build after an in-place update. Keeping the version out of
+    this file avoids a second copy that drifts from package.json.
+  -->
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div class="noise"></div>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">A3</div>
+      <div>
+        <div class="brand-title">AI3D <span>PRINT FLOW</span></div>
+        <div class="brand-sub">Qwen Image · TRELLIS.2 · Blender · CHITUBOX</div>
+      </div>
+    </div>
+    <div class="status-strip" id="statusStrip">
+      <button class="status-chip" data-status="gpu"><i></i><span>GPU</span><b>检测中</b></button>
+      <button class="status-chip" data-status="comfy"><i></i><span>ComfyUI</span><b>检测中</b></button>
+      <button class="status-chip" data-status="trellis"><i></i><span>TRELLIS.2</span><b>检测中</b></button>
+      <button class="status-chip" data-status="blender"><i></i><span>Blender</span><b>检测中</b></button>
+      <button class="status-chip" data-status="chitubox"><i></i><span>CHITUBOX</span><b>检测中</b></button>
+    </div>
+    <div class="top-actions">
+      <button class="btn ghost" id="btnRecheck">重新检查</button>
+      <button class="btn ghost" id="btnSettings">设置</button>
+    </div>
+  </header>
+
+  <div class="connection-banner" id="connectionBanner" role="alert" aria-live="assertive" hidden>
+    <div>
+      <b>本地服务连接中断</b>
+      <span id="connectionText">无法连接 127.0.0.1。请确认启动窗口还在运行。</span>
+    </div>
+    <div class="connection-actions">
+      <button class="btn small ghost" id="btnCopyDiagnostics">复制诊断信息</button>
+      <button class="btn small" id="btnConnectionRetry">重试连接</button>
+    </div>
+  </div>
+
+  <main class="shell" id="main">
+    <section class="hero">
+      <div class="hero-copy">
+        <div class="eyebrow">LOCAL · FREE · WATERTIGHT</div>
+        <h1>从一张图，<br /><em>到可打印的 STL。</em></h1>
+        <p>把视频里的完整工作流变成一台本地控制台：环境部署、Qwen 生图、TRELLIS.2 转 3D、Blender 清理、CHITUBOX 切片，每一步都有状态、参数与排错提示。</p>
+        <div class="hero-actions">
+          <button class="btn primary" data-scroll="#deploy">开始部署</button>
+          <button class="btn ghost" data-action="open.path" data-path="docs/视频知识总结.md">查看视频知识总结</button>
+        </div>
+      </div>
+      <div class="hero-card">
+        <div class="pipeline">
+          <div class="pipe-step"><span>01</span><b>Qwen Image 2.1</b><small>2K 文生图</small></div>
+          <div class="pipe-line"></div>
+          <div class="pipe-step"><span>02</span><b>TRELLIS.2</b><small>图 → 3D 网格</small></div>
+          <div class="pipe-line"></div>
+          <div class="pipe-step"><span>03</span><b>WTiVo + Blender</b><small>水密 + 清理</small></div>
+          <div class="pipe-line"></div>
+          <div class="pipe-step"><span>04</span><b>CHITUBOX</b><small>支撑 + 切片</small></div>
+        </div>
+        <div class="hero-note">
+          <span class="pulse"></span>
+          <span id="heroStatus">正在读取本机环境…</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="deploy">
+      <div class="section-head">
+        <div>
+          <div class="kicker">STEP 00 / DEPLOY</div>
+          <h2>环境部署</h2>
+          <p>按顺序完成。绿色表示已就绪；灰色表示可选；红色会阻塞工作流。</p>
+        </div>
+        <div class="summary-pills" id="summaryPills"></div>
+      </div>
+
+      <div class="deploy-mode" role="group" aria-label="选择部署方式">
+        <button type="button" class="mode-btn active" data-deploy-mode="oneclick" aria-pressed="true">
+          <span class="mode-num">A</span>
+          <span><b>一键部署</b><small>推荐 · 自动串完整条流程，可断点续跑</small></span>
+        </button>
+        <button type="button" class="mode-btn" data-deploy-mode="manual" aria-pressed="false">
+          <span class="mode-num">B</span>
+          <span><b>手动分步</b><small>自己控制 01–05 的每个安装器</small></span>
+        </button>
+      </div>
+
+      <div class="oneclick" id="oneClick" data-deploy-panel="oneclick">
+        <div class="oneclick-head">
+          <div class="oneclick-copy">
+            <div class="kicker">RECOMMENDED · ONE CLICK</div>
+            <h3>一键部署整条工作流</h3>
+            <p>自动完成 ComfyUI → PyTorch 2.8 → TRELLIS.2 → 水密节点与模型 → 工作流。已完成的步骤会自动跳过，失败后再次点击会从断点继续。</p>
+          </div>
+          <div class="oneclick-start">
+            <label class="checkline">
+              <input type="checkbox" id="oneClickQwen" />
+              <span>同时下载 Qwen-Image 2.1 模型 <b>（约 25 GB，可选）</b></span>
+            </label>
+            <label class="checkline">
+              <input type="checkbox" id="oneClickReuse" checked />
+              <span>自动复用本机同名模型 <b>（只匹配精确文件名，不重复下载）</b></span>
+            </label>
+            <div class="reuse-hint" id="oneClickReuseHint">正在扫描本机模型…</div>
+            <button class="btn primary" id="btnOneClick">开始一键部署</button>
+          </div>
+        </div>
+
+        <div class="oneclick-progress" id="oneClickProgress" hidden>
+          <div class="oneclick-stages" id="oneClickStages">
+            <span class="stage-chip" data-stage="comfy">01 ComfyUI</span>
+            <span class="stage-chip" data-stage="torch">02 Torch 2.8</span>
+            <span class="stage-chip" data-stage="trellis">03 TRELLIS.2</span>
+            <span class="stage-chip" data-stage="pixel">04 水密节点/模型</span>
+            <span class="stage-chip" data-stage="qwen">05 Qwen（可选）</span>
+            <span class="stage-chip" data-stage="done">06 完成</span>
+          </div>
+          <div class="oneclick-bar-row">
+            <div class="progress big" id="oneClickProgressBar" role="progressbar" aria-label="一键部署进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="oneClickBar"></div></div>
+            <b id="oneClickPct">0%</b>
+          </div>
+          <div class="oneclick-msg" id="oneClickMsg">准备中…</div>
+          <div class="oneclick-detail" id="oneClickDetail"></div>
+          <div class="oneclick-error" id="oneClickError" hidden></div>
+          <div class="oneclick-actions">
+            <button class="btn small ghost" id="btnOneClickLog">展开日志</button>
+            <button class="btn small ghost" id="btnOneClickCancel" hidden>取消部署</button>
+            <button class="btn small ghost" data-action="install.qwenModels">仅下载 Qwen 模型</button>
+            <button class="btn small ghost" data-action="comfy.start">启动 ComfyUI</button>
+            <button class="btn small link" data-action="folder.open" data-target="logs">打开服务日志</button>
+          </div>
+          <pre class="oneclick-log" id="oneClickLog" hidden></pre>
+        </div>
+      </div>
+
+      <div class="doctor" id="doctorPanel">
+        <div class="doctor-head">
+          <div>
+            <div class="kicker">POST-DEPLOY · DIAGNOSTICS</div>
+            <h3>部署后自检与问题诊断</h3>
+            <p>检查安装完整性、Torch / 节点 / 模型、磁盘与工具链，并评估本机已有模型能否复用。一键部署结束后会自动运行一次。</p>
+          </div>
+          <div class="doctor-actions">
+            <button class="btn small primary" id="btnDeployDoctor">开始自检</button>
+            <button class="btn small ghost" id="btnDoctorCopy" hidden>复制报告</button>
+          </div>
+        </div>
+        <div class="doctor-result" id="doctorResult" hidden></div>
+      </div>
+
+      <div class="deploy-grid" id="manualDeploy" hidden>
+        <article class="deploy-card" data-check-group="comfy">
+          <div class="deploy-top"><span class="num">01</span><span class="badge" data-badge="comfy">检测中</span></div>
+          <h3>ComfyUI Easy Install</h3>
+          <p>官方一键便携包，自带 Python 3.12 与 Git。解压后运行安装器，按默认选项完成。</p>
+          <div class="deploy-actions">
+            <button class="btn small primary" data-action="install.comfy.download">下载并解压</button>
+            <button class="btn small ghost" data-action="install.comfy.run">运行安装器</button>
+            <button class="btn small link" data-action="folder.open" data-target="install">打开目录</button>
+          </div>
+          <div class="deploy-meta" data-meta="comfy">等待检测</div>
+        </article>
+
+        <article class="deploy-card" data-check-group="trellis">
+          <div class="deploy-top"><span class="num">02</span><span class="badge" data-badge="trellis">检测中</span></div>
+          <h3>Torch 2.8 + TRELLIS.2</h3>
+          <p>先切换 PyTorch 2.8.0 + CUDA 12.8，再运行 Add-ons 里的 TRELLIS.2 安装器。WTiVo 依赖这个精确组合。</p>
+          <div class="deploy-actions">
+            <button class="btn small ghost" data-action="install.torch28.run">切换 Torch 2.8</button>
+            <button class="btn small primary" data-action="install.trellis.run">安装 TRELLIS.2</button>
+          </div>
+          <div class="deploy-meta" data-meta="trellis">等待检测</div>
+        </article>
+
+        <article class="deploy-card" data-check-group="nodes">
+          <div class="deploy-top"><span class="num">03</span><span class="badge" data-badge="nodes">检测中</span></div>
+          <h3>PixelArtistry 水密节点</h3>
+          <p>安装 WTiVo、Quad Reconstruct、LODTailor、Fast Merge 等节点，并写入 4 个打印工作流。</p>
+          <div class="deploy-actions">
+            <button class="btn small primary" data-action="install.pixel.run">运行节点安装器</button>
+            <button class="btn small ghost" data-action="install.workflows">仅写入工作流</button>
+          </div>
+          <div class="deploy-meta" data-meta="nodes">等待检测</div>
+        </article>
+
+        <article class="deploy-card" data-check-group="blender">
+          <div class="deploy-top"><span class="num">04</span><span class="badge" data-badge="blender">检测中</span></div>
+          <h3>Blender 5.x</h3>
+          <p>用于 LODTailor 节点和本控制台的 GLB → STL 后处理。建议干净安装，不加第三方插件。</p>
+          <div class="deploy-actions">
+            <button class="btn small primary" data-action="install.blender">winget 安装</button>
+            <button class="btn small ghost" data-action="download.open" data-kind="blender">官网下载</button>
+          </div>
+          <div class="deploy-meta" data-meta="blender">等待检测</div>
+        </article>
+
+        <article class="deploy-card" data-check-group="chitubox">
+          <div class="deploy-top"><span class="num">05</span><span class="badge" data-badge="chitubox">检测中</span></div>
+          <h3>CHITUBOX</h3>
+          <p>加支撑、摆放、切片。视频使用的是光固化树脂打印；FDM 用户也可用其它切片器。</p>
+          <div class="deploy-actions">
+            <button class="btn small ghost" data-action="download.open" data-kind="chitubox">官网下载</button>
+            <button class="btn small ghost" data-action="chitubox.open">启动 CHITUBOX</button>
+          </div>
+          <div class="deploy-meta" data-meta="chitubox">等待检测</div>
+        </article>
+
+        <article class="deploy-card hint-card">
+          <div class="deploy-top"><span class="num">!</span><span class="badge warn">先读我</span></div>
+          <h3>三个无法完全自动化的点</h3>
+          <ul class="tight">
+            <li>ComfyUI Easy Install 是交互式向导，需要你点几次「下一步」。</li>
+            <li>部分模型/节点在 GitHub / Hugging Face，首次下载可能较慢。</li>
+            <li>CHITUBOX 的支撑与树脂参数需按你的打印机、树脂与环境调整。</li>
+          </ul>
+          <button class="btn small link" data-action="open.path" data-path="docs/部署指南.md">打开完整部署指南</button>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="create">
+      <div class="section-head">
+        <div>
+          <div class="kicker">STEP 01–02 / GENERATE</div>
+          <h2>生成图片与 3D 网格</h2>
+          <p>先在 ComfyUI 里跑 Qwen 文生图，再跑 PixelArtistry 水密工作流。控制台会帮你注入图片、Blender 路径与显存档位。</p>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <article class="card">
+          <div class="card-head">
+            <div><span class="card-num">01</span><h3>Qwen Image 2.1 文生图</h3></div>
+            <span class="tag">2K native</span>
+          </div>
+          <label class="field">
+            <span>主体描述</span>
+            <input id="subject" placeholder="例：一条盘踞在圆形底座上的东方龙，鳞片清晰" />
+          </label>
+          <label class="field">
+            <span>风格与细节</span>
+            <textarea id="stylePrompt" rows="4">miniature statue, highly detailed scales, dynamic pose, compact single subject, integrated circular base, clean silhouette, neutral background, no text, no watermark, designed for 3D printing</textarea>
+          </label>
+          <div class="row">
+            <label class="field compact">
+              <span>分辨率</span>
+              <select id="qwenPreset">
+                <option value="1k">1K · 1024</option>
+                <option value="1.5k">1.5K · 1536</option>
+                <option value="2k" selected>2K · 2048</option>
+              </select>
+            </label>
+            <button class="btn primary grow" id="btnPrepareQwen">生成提示词并写入工作流</button>
+          </div>
+          <div class="mini-actions">
+            <button class="btn small ghost" data-action="comfy.open">打开 ComfyUI</button>
+            <button class="btn small ghost" data-action="folder.open" data-target="comfyOutput">打开输出目录</button>
+            <button class="btn small link" id="btnCopyPrompt">复制提示词</button>
+          </div>
+          <div class="callout" id="qwenResult">提示词会按「单一紧凑主体 + 一体化底座 + 可打印细节」组合，并写入 Qwen 工作流。</div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <div><span class="card-num">02</span><h3>图片 → 水密 3D 网格</h3></div>
+            <span class="tag accent">TRELLIS.2</span>
+          </div>
+          <div class="dropzone" id="imageDrop">
+            <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp" hidden />
+            <img id="imagePreview" class="image-preview" alt="已选择图片" hidden />
+            <div class="drop-icon">▧</div>
+            <b id="imageDropTitle">拖入生成图，或点击选择</b>
+            <small>PNG / JPG / WebP · 建议主体完整、背景干净、正面视角</small>
+            <div class="file-line" id="imageFileLine" aria-live="polite">尚未选择图片</div>
+            <small id="imagePreviewError" role="status"></small>
+          </div>
+          <div class="segmented" id="meshPreset">
+            <button data-preset="1k">1K<small>6–8 GB</small></button>
+            <button data-preset="1.5k" class="active">1.5K<small>8–16 GB</small></button>
+            <button data-preset="2k">2K<small>16 GB+ / 32 GB RAM</small></button>
+          </div>
+          <div class="param-line">
+            <span>代理点</span><b id="proxyHint">12,000,000</b>
+            <span>WTiVo 分辨率</span><b id="resHint">1536</b>
+          </div>
+          <p class="mesh-next" id="meshNext" role="status">① 先选择图片；导入成功后，这里会显示预览和文件名。</p>
+          <button class="btn primary wide" id="btnPrepareMesh" disabled>② 创建水密工作流</button>
+          <div class="callout" id="meshResult" role="status">创建工作流后，还需在 ComfyUI 点击 Run（运行），才会开始生成 3D 网格。</div>
+          <div class="mesh-workflow-ready" id="meshWorkflowReady" hidden>
+            <b>③ 在 ComfyUI 开始生成网格</b>
+            <ol>
+              <li>点击「打开 ComfyUI」；服务未启动时，先点击「启动 ComfyUI」并等待启动完成。</li>
+              <li>在左侧 Workflows → PixelArtistry 中打开这份文件：<strong id="meshWorkflowName"></strong>。若未显示，刷新 ComfyUI，或从工作流目录拖入这份 JSON。</li>
+              <li>点击 Run（运行），等待运行完成并保存 GLB。</li>
+              <li>回到本页点击「运行完成后：导入最新 GLB」，再到下方运行 Blender 后处理。</li>
+            </ol>
+            <div class="mini-actions">
+              <button class="btn small primary" data-action="comfy.open">打开 ComfyUI</button>
+              <button class="btn small ghost" data-action="comfy.start">启动 ComfyUI</button>
+            </div>
+          </div>
+          <div class="mini-actions">
+            <button class="btn small ghost" data-action="comfy.latestGlb">运行完成后：导入最新 GLB</button>
+            <button class="btn small ghost" data-action="folder.open" data-target="workflows">打开工作流目录</button>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="post">
+      <div class="section-head">
+        <div>
+          <div class="kicker">STEP 03 / POST-PROCESS</div>
+          <h2>Blender 清理与 STL 导出</h2>
+          <p>等价于视频里的手工步骤：导入 GLB → 按松散块分离 → 删除碎屑 → 合并 → 检查水密 → 按选中导出 STL。这里用无头 Blender 自动完成。</p>
+        </div>
+        <div class="summary-pills"><span class="pill" id="blenderPill">Blender 检测中</span></div>
+      </div>
+
+      <div class="post-grid">
+        <article class="card">
+          <div class="dropzone compact" id="glbDrop">
+            <input type="file" id="glbInput" accept=".glb,.gltf" hidden />
+            <div class="drop-icon">◈</div>
+            <b>拖入 GLB / GLTF</b>
+            <small>或从 ComfyUI 输出目录自动导入</small>
+            <div class="file-line" id="glbFileLine">尚未选择 GLB</div>
+          </div>
+          <div class="path-row">
+            <input id="glbPath" placeholder="D:\...\model.glb" />
+            <button class="btn small ghost" id="btnBrowseGlb">浏览</button>
+          </div>
+          <div class="param-grid">
+            <label class="field compact"><span>目标高度 (mm)</span><input id="targetHeight" type="number" min="0" max="2000" step="1" value="80" /></label>
+            <label class="field compact"><span>网格修复</span>
+              <select id="repairMode">
+                <option value="auto">自动（推荐）</option>
+                <option value="fill">仅补小洞</option>
+                <option value="voxel">体素重建（强力）</option>
+                <option value="none">不修复</option>
+              </select>
+            </label>
+            <label class="field compact"><span>减面比例</span>
+              <select id="decimateRatio">
+                <option value="0">不减速</option>
+                <option value="0.75">保留 75%</option>
+                <option value="0.5">保留 50%</option>
+                <option value="0.3">保留 30%</option>
+              </select>
+            </label>
+          </div>
+          <label class="checkline"><input type="checkbox" id="keepLargest" checked /> 只保留主部件与占比 ≥1% 的独立部件（删除碎屑）</label>
+          <button class="btn primary wide" id="btnPostprocess">运行 Blender 后处理</button>
+          <div class="callout">目标高度 80 mm 约等于视频中在 CHITUBOX 里把 100 改成 10000 后的微缩模型尺寸；可按你的打印机平台调整。</div>
+        </article>
+
+        <article class="card result-card" id="resultCard">
+          <div class="card-head">
+            <div><span class="card-num">03</span><h3>检测结果</h3></div>
+            <span class="tag" id="watertightTag">等待运行</span>
+          </div>
+          <div class="result-hero" id="resultHero">
+            <div class="result-big" id="resultBig">—</div>
+            <div class="result-label" id="resultLabel">还没有生成 STL</div>
+          </div>
+          <div class="metrics" id="resultMetrics">
+            <div><span>尺寸</span><b>—</b></div>
+            <div><span>三角面</span><b>—</b></div>
+            <div><span>体积</span><b>—</b></div>
+            <div><span>边界边</span><b>—</b></div>
+            <div><span>非流形边</span><b>—</b></div>
+            <div><span>文件大小</span><b>—</b></div>
+          </div>
+          <div class="warnings" id="resultWarnings"></div>
+          <div class="result-actions">
+            <a class="btn small primary disabled" id="btnDownloadStl" href="#" download>下载 STL</a>
+            <button class="btn small ghost" id="btnOpenStlFolder">打开文件夹</button>
+            <button class="btn small ghost" data-action="chitubox.open">启动 CHITUBOX</button>
+          </div>
+          <div class="report-note" id="reportNote"></div>
+          <div class="artifacts" id="artifacts" hidden>
+            <div class="artifacts-head">
+              <span>最近产物</span>
+              <button class="link" id="btnArtifactsRefresh" type="button">刷新</button>
+            </div>
+            <ul class="artifact-list" id="artifactList"></ul>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="print">
+      <div class="section-head">
+        <div>
+          <div class="kicker">STEP 04 / SLICE & PRINT</div>
+          <h2>CHITUBOX 切片检查清单</h2>
+          <p>视频里的参数不是万能配方。下面是可以直接照做的起点，最终以你的打印机、树脂和曝光测试为准。</p>
+        </div>
+      </div>
+      <div class="print-grid">
+        <article class="check-card"><span>01</span><h3>导入与比例</h3><p>导入 STL。若模型仍很小，把比例 100 改为 10000（即放大 100 倍）；本控制台默认已按 80 mm 缩放。</p></article>
+        <article class="check-card"><span>02</span><h3>摆放与空心</h3><p>抬高 2–3 mm，避免底面直接粘平台。大模型建议空心 2–3 mm 壁厚，并在最低处开 2 个排液孔。</p></article>
+        <article class="check-card"><span>03</span><h3>支撑</h3><p>微缩模型用 Light 支撑；支撑类型可选 Cross/Branch 以共享支撑。底座高度 2.0 mm，关闭自动抬升与平台接触形状。</p></article>
+        <article class="check-card"><span>04</span><h3>切片与后固化</h3><p>按树脂参数切片，检查每层岛。打印后清洗、拆支撑、UV 固化；避免直接触摸未固化树脂。</p></article>
+      </div>
+    </section>
+
+    <section class="section" id="help">
+      <div class="section-head">
+        <div>
+          <div class="kicker">REFERENCE</div>
+          <h2>视频要点与常见问题</h2>
+        </div>
+        <div class="summary-pills">
+          <button class="btn small ghost" data-action="open.path" data-path="docs/视频知识总结.md">完整知识总结</button>
+          <button class="btn small ghost" data-action="open.path" data-path="docs/参数与排错.md">参数与排错</button>
+        </div>
+      </div>
+      <div class="faq-grid">
+        <details open><summary>为什么一定要水密（watertight）？</summary><p>光固化切片器需要明确区分「实体内部」与「外部」。有破洞、悬浮面或内外壳的网格会让切片出现空洞、缺层或错误支撑。WTiVo 用稀疏体素场重建闭合网格，Fast Merge 再焊掉重复顶点。</p></details>
+        <details><summary>1K、1.5K、2K 怎么选？</summary><p>6–8 GB 显存选 1K；8–16 GB 选 1.5K（视频作者最推荐，速度与细节平衡）；16 GB+ 显存且 32 GB+ 内存再选 2K。2K 的 WTiVo 会绕过 Quad Reconstruct，代理点 25M，网格可达 4300 万面。</p></details>
+        <details><summary>Blender 报错 / 找不到路径？</summary><p>工作流里的 Blender 路径不要带首尾双引号；建议使用干净安装的 Blender，避免 Auto-Rig Pro、PolyQuilt 等插件在无头模式报错。也可以下载 Blender ZIP，在 blender.exe 旁建一个空文件夹 <code>portable</code>。</p></details>
+        <details><summary>导出的 STL 为什么在 CHITUBOX 里很小？</summary><p>Blender 的 1 单位与 STL 数值没有单位语义。视频里的做法是保持比例 1 导出，再在 CHITUBOX 里把 100 改成 10000。本工具会直接按目标毫米高度缩放，通常不需要再改。</p></details>
+        <details><summary>生成结果有洞怎么办？</summary><p>先换随机种子重跑（结构种子默认 randomize）。仍失败时，把修复模式改为「体素重建」，或提高 WTiVo 的 lambda_fill（小洞 10–20，大洞 30–40）。注意过高的 lambda_fill 会封住本该保留的开口。</p></details>
+        <details><summary>显卡不是 NVIDIA 能用吗？</summary><p>视频方案基于 CUDA 12.8，仅支持 NVIDIA RTX 20 系及以上。AMD ROCm 版本仍在开发；也可考虑云端 GPU，但不再是「100% 本地」。</p></details>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div>AI3D Print Flow <span id="appVersion">v—</span> · 本地运行 · 不上传图片与模型</div>
+      <div class="footer-links">
+        <button class="link" data-action="open.path" data-path="README.md">README</button>
+        <button class="link" data-action="open.path" data-path="docs/部署指南.md">部署指南</button>
+        <button class="link" data-action="shortcut.create">创建桌面快捷方式</button>
+      </div>
+    </footer>
+  </main>
+
+  <aside class="drawer" id="settingsDrawer" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" aria-hidden="true">
+    <div class="drawer-head">
+      <h3 id="settingsTitle">设置</h3>
+      <button class="icon-btn" id="btnCloseSettings" aria-label="关闭设置">×</button>
+    </div>
+    <div class="drawer-body">
+      <label class="field"><span>安装根目录</span><input id="cfgInstallRoot" placeholder="D:\AI3D" /></label>
+      <label class="field"><span>ComfyUI 根目录</span><input id="cfgComfyRoot" placeholder="D:\AI3D\ComfyUI-Easy-Install" /></label>
+      <label class="field"><span>Blender 可执行文件</span><input id="cfgBlender" placeholder="C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" /></label>
+      <label class="field"><span>CHITUBOX 可执行文件</span><input id="cfgChitubox" placeholder="C:\Program Files\CHITUBOX\CHITUBOX.exe" /></label>
+      <div class="param-grid">
+        <label class="field compact"><span>默认目标高度 (mm)</span><input id="cfgHeight" type="number" min="0" max="2000" /></label>
+        <label class="field compact"><span>默认修复模式</span>
+          <select id="cfgRepair"><option value="auto">自动</option><option value="fill">仅补洞</option><option value="voxel">体素重建</option><option value="none">不修复</option></select>
+        </label>
+      </div>
+      <button class="btn primary wide" id="btnSaveSettings">保存设置</button>
+      <div class="drawer-note">配置保存在本包 <code>config/config.json</code>。移动包体后请同步修改路径。</div>
+      <div class="drawer-actions">
+        <button class="btn small ghost" data-action="shortcut.create">创建桌面快捷方式</button>
+        <button class="btn small ghost" data-action="open.path" data-path="logs">打开日志目录</button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+
+  <section class="jobbar" id="jobbar" aria-live="polite" aria-label="后台任务">
+    <div class="job-head">
+      <div class="job-title"><span class="spinner" id="jobSpinner"></span><b id="jobTitle">任务</b><span id="jobMessage">准备中…</span></div>
+      <div class="job-actions">
+        <span class="job-percent" id="jobPercent">0%</span>
+        <button class="link" id="btnCancelJob" hidden>取消</button>
+        <button class="link" id="btnToggleLog" aria-expanded="false" aria-controls="jobLog">展开日志</button>
+        <button class="icon-btn" id="btnHideJob" aria-label="隐藏任务栏">×</button>
+      </div>
+    </div>
+    <div class="progress" id="jobProgressBar" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="jobProgress"></div></div>
+    <div class="job-detail" id="jobDetail"></div>
+    <pre class="job-log" id="jobLog" aria-label="任务日志" hidden></pre>
+  </section>
+
+  <div class="toast-wrap" id="toastWrap" role="status" aria-live="polite" aria-atomic="false"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

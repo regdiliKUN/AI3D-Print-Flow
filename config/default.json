@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "installRoot": "",
+  "comfyuiRoot": "",
+  "blenderPath": "",
+  "chituboxPath": "C:\\Program Files\\CHITUBOX\\CHITUBOX.exe",
+  "workspaceDir": "",
+  "preset": "1.5k",
+  "targetHeightMm": 80,
+  "repairMode": "auto",
+  "decimateRatio": 0,
+  "port": 17860,
+  "comfyUrl": "http://127.0.0.1:8188",
+  "lastImage": "",
+  "lastGlb": "",
+  "lastStl": "",
+  "lastReport": ""
+}

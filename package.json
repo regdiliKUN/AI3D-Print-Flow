@@ -1,0 +1,31 @@
+{
+  "name": "ai3d-print-flow",
+  "version": "1.6.0",
+  "private": true,
+  "description": "Local Windows console for Qwen-Image 2.1 + TRELLIS.2 + WTiVo + Blender + CHITUBOX image-to-print workflow",
+  "type": "module",
+  "scripts": {
+    "start": "node app/server.mjs",
+    "deploy": "node app/server.mjs --deploy",
+    "check": "node app/cli.mjs check",
+    "postprocess": "node app/cli.mjs postprocess",
+    "build:launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-launcher.ps1",
+    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/create-shortcut.ps1",
+    "test": "node scripts/test-all.mjs",
+    "test:all": "node scripts/test-all.mjs",
+    "test:config": "node scripts/test-config.mjs",
+    "test:jobs": "node scripts/test-jobs.mjs",
+    "test:download": "node scripts/test-download.mjs",
+    "test:util": "node scripts/test-util.mjs",
+    "test:stl": "node scripts/test-stl.mjs",
+    "test:report": "node scripts/test-report.mjs",
+    "test:errors": "node scripts/test-errors.mjs",
+    "test:install": "node scripts/test-install.mjs",
+    "test:api": "node scripts/test-api.mjs",
+    "test:image-flow": "node scripts/test-image-flow.mjs",
+    "test:smoke": "node scripts/smoke-test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
