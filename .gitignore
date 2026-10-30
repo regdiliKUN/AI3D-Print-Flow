@@ -4,6 +4,7 @@ workspace/input/*
 workspace/glb/*
 workspace/stl/*
 workspace/reports/*
+workspace/text/*
 workflows/*.json
 
 # 目录占位文件要保留，否则 clone 后目录不存在
@@ -12,6 +13,7 @@ workflows/*.json
 !workspace/glb/.gitkeep
 !workspace/stl/.gitkeep
 !workspace/reports/.gitkeep
+!workspace/text/.gitkeep
 !workflows/.gitkeep
 
 # 本地个人配置（含本机路径，不随仓库分发）

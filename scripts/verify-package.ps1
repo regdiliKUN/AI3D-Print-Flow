@@ -39,7 +39,8 @@ try {
     'runtime\node.exe',
     'PACKAGE_INFO.json',
     'README.md',
-    'docs'
+    'docs',
+    'workspace\text'
   )
   foreach ($rel in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $stage $rel))) { throw "Missing from package: $rel" }

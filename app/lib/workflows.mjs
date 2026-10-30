@@ -2,23 +2,17 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { join } from 'node:path';
 import { loadConfig } from './config.mjs';
 import { resolveComfyRoot, VENDOR_DIR, WORKFLOWS_DIR } from './paths.mjs';
+import { PRESETS, isPresetKey, presetInfo } from './presets.mjs';
 import { safeName, timestamp } from './util.mjs';
+
+// 档位定义已收敛到 presets.mjs；这里保留导出名，避免调用方大改。
+export { presetInfo };
 
 const PIXEL_SOURCES = {
   '1k': 'PixelArtistry_01_Image_to_Watertight_Mesh.json',
   '1.5k': 'PixelArtistry_01_Image_to_Watertight_Mesh.json',
   '2k': 'PixelArtistry_01b_Image_to_Watertight_Mesh_2K.json',
 };
-
-const PRESETS = {
-  '1k': { resolution: 1024, proxy: 8_000_000, label: '1K · 低显存' },
-  '1.5k': { resolution: 1536, proxy: 12_000_000, label: '1.5K · 推荐' },
-  '2k': { resolution: 2048, proxy: 25_000_000, label: '2K · 高细节' },
-};
-
-export function presetInfo(preset) {
-  return PRESETS[preset] || PRESETS['1.5k'];
-}
 
 export function workflowDir(comfyRoot) {
   return join(comfyRoot, 'ComfyUI', 'user', 'default', 'workflows', 'PixelArtistry');
@@ -101,7 +95,7 @@ export function preparePixelWorkflow({ preset = '1.5k', imagePath, imageName, bl
     throw new Error(`未找到 ComfyUI：${comfyRoot}`);
   }
 
-  const key = PRESETS[preset] ? preset : '1.5k';
+  const key = isPresetKey(preset) ? preset : '1.5k';
   const sourceName = PIXEL_SOURCES[key];
   const sourcePath = join(VENDOR_DIR, 'pixelartistry', 'workflows', sourceName);
   if (!existsSync(sourcePath)) throw new Error(`缺少内置工作流：${sourceName}`);
@@ -191,9 +185,8 @@ export function prepareQwenWorkflow({ prompt = '', preset = '2k', seed } = {}) {
   const sourcePath = join(VENDOR_DIR, 'comfy', 'qwen-image-2.1-t2i.json');
   if (!existsSync(sourcePath)) throw new Error('缺少内置 Qwen-Image 2.1 工作流模板。');
 
-  const key = preset === '2k' ? '2k' : preset === '1.5k' ? '1.5k' : '1k';
-  const mp = key === '2k' ? 4 : key === '1.5k' ? 2.25 : 1;
-  const px = key === '2k' ? 2048 : key === '1.5k' ? 1536 : 1024;
+  const key = isPresetKey(preset) ? preset : '2k';
+  const { mp, px } = presetInfo(key);
   const seedNumber = Number(seed);
   const finalSeed = seed !== undefined && seed !== '' && Number.isFinite(seedNumber)
     ? Math.max(0, Math.floor(seedNumber))

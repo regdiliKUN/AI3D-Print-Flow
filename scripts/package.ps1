@@ -81,7 +81,7 @@ try {
   if ($LASTEXITCODE -gt 7) { throw "robocopy failed with code $LASTEXITCODE" }
 
   # Keep the expected empty folders and a clean config in the ZIP.
-  foreach ($dir in @('workspace', 'workspace\input', 'workspace\glb', 'workspace\stl', 'workspace\reports', 'logs', 'workflows')) {
+  foreach ($dir in @('workspace', 'workspace\input', 'workspace\glb', 'workspace\stl', 'workspace\reports', 'workspace\text', 'logs', 'workflows')) {
     $full = Join-Path $stage $dir
     if (-not (Test-Path -LiteralPath $full)) { New-Item -ItemType Directory -Path $full -Force | Out-Null }
   }

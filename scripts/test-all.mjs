@@ -17,6 +17,7 @@ const SUITES = [
   ['安装目录', 'test-install.mjs'],
   ['HTTP 接口', 'test-api.mjs'],
   ['图片交互', 'test-image-flow.mjs'],
+  ['多模态输入', 'test-multimodal.mjs'],
   ['安全冒烟', 'smoke-test.mjs'],
 ];
 

@@ -1,6 +1,6 @@
 {
   "name": "ai3d-print-flow",
-  "version": "1.6.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Local Windows console for Qwen-Image 2.1 + TRELLIS.2 + WTiVo + Blender + CHITUBOX image-to-print workflow",
   "type": "module",
@@ -23,7 +23,8 @@
     "test:install": "node scripts/test-install.mjs",
     "test:api": "node scripts/test-api.mjs",
     "test:image-flow": "node scripts/test-image-flow.mjs",
-    "test:smoke": "node scripts/smoke-test.mjs"
+    "test:smoke": "node scripts/smoke-test.mjs",
+    "test:multimodal": "node scripts/test-multimodal.mjs"
   },
   "engines": {
     "node": ">=20"

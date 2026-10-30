@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI3D Print Flow · 从图片到可打印 STL</title>
+  <title>AI3D Print Flow · 从文字或图片到可打印 STL</title>
   <!--
     No `?v=` cache-busting query here: static JS/CSS are served with
     `Cache-Control: no-cache` plus a content ETag, so a revalidation already
@@ -30,6 +30,7 @@
       <button class="status-chip" data-status="trellis"><i></i><span>TRELLIS.2</span><b>检测中</b></button>
       <button class="status-chip" data-status="blender"><i></i><span>Blender</span><b>检测中</b></button>
       <button class="status-chip" data-status="chitubox"><i></i><span>CHITUBOX</span><b>检测中</b></button>
+      <button class="status-chip" data-status="vlm" title="可选的本地视觉模型：把图片反推成提示词"><i></i><span>视觉模型</span><b>未配置</b></button>
     </div>
     <div class="top-actions">
       <button class="btn ghost" id="btnRecheck">重新检查</button>
@@ -48,20 +49,44 @@
     </div>
   </div>
 
+  <!-- 常驻「下一步」引导：任何时刻只显示一个最重要的动作。 -->
+  <div class="next-step" id="nextStep" hidden>
+    <div class="ns-track" id="nextStepTrack" aria-hidden="true">
+      <span class="ns-chip" data-stage="env">01 环境</span>
+      <span class="ns-line"></span>
+      <span class="ns-chip" data-stage="input">02 输入</span>
+      <span class="ns-line"></span>
+      <span class="ns-chip" data-stage="mesh">03 网格</span>
+      <span class="ns-line"></span>
+      <span class="ns-chip" data-stage="post">04 后处理</span>
+      <span class="ns-line"></span>
+      <span class="ns-chip" data-stage="print">05 打印</span>
+    </div>
+    <div class="ns-main">
+      <b id="nextStepTitle">正在读取本机状态…</b>
+      <span id="nextStepText"></span>
+    </div>
+    <div class="ns-actions">
+      <button class="btn small primary" id="nextStepBtn" type="button">继续</button>
+      <button class="icon-btn small" id="btnHideNextStep" aria-label="收起引导条" title="收起引导条">×</button>
+    </div>
+  </div>
+
   <main class="shell" id="main">
     <section class="hero">
       <div class="hero-copy">
         <div class="eyebrow">LOCAL · FREE · WATERTIGHT</div>
-        <h1>从一张图，<br /><em>到可打印的 STL。</em></h1>
-        <p>把视频里的完整工作流变成一台本地控制台：环境部署、Qwen 生图、TRELLIS.2 转 3D、Blender 清理、CHITUBOX 切片，每一步都有状态、参数与排错提示。</p>
+        <h1>一句描述，或一张图，<br /><em>到可打印的 STL。</em></h1>
+        <p>把视频里的完整工作流变成一台本地控制台：文字、图片、甚至一份 .txt 提示词都能作为输入，之后依次完成 Qwen 生图、TRELLIS.2 转 3D、Blender 清理与 CHITUBOX 切片。每一步都有状态、参数与排错提示。</p>
         <div class="hero-actions">
-          <button class="btn primary" data-scroll="#deploy">开始部署</button>
+          <button class="btn primary" data-scroll="#create">开始建模</button>
+          <button class="btn ghost" data-scroll="#deploy">环境部署</button>
           <button class="btn ghost" data-action="open.path" data-path="docs/视频知识总结.md">查看视频知识总结</button>
         </div>
       </div>
       <div class="hero-card">
         <div class="pipeline">
-          <div class="pipe-step"><span>01</span><b>Qwen Image 2.1</b><small>2K 文生图</small></div>
+          <div class="pipe-step"><span>01</span><b>Qwen Image 2.1</b><small>文字 / 图片 → 2K 图</small></div>
           <div class="pipe-line"></div>
           <div class="pipe-step"><span>02</span><b>TRELLIS.2</b><small>图 → 3D 网格</small></div>
           <div class="pipe-line"></div>
@@ -233,26 +258,58 @@
     <section class="section" id="create">
       <div class="section-head">
         <div>
-          <div class="kicker">STEP 01–02 / GENERATE</div>
-          <h2>生成图片与 3D 网格</h2>
-          <p>先在 ComfyUI 里跑 Qwen 文生图，再跑 PixelArtistry 水密工作流。控制台会帮你注入图片、Blender 路径与显存档位。</p>
+          <div class="kicker">STEP 01–02 / INPUT &amp; GENERATE</div>
+          <h2>输入与生成</h2>
+          <p>两条入口：写一句描述让 Qwen 出图，或直接给一张图转 3D。两种输入都会先做可用性检查，再写进 ComfyUI 工作流。</p>
+        </div>
+        <div class="summary-pills">
+          <span class="pill" id="vlmPill">视觉模型 检测中</span>
         </div>
       </div>
 
       <div class="two-col">
-        <article class="card">
+        <article class="card" id="promptCard">
           <div class="card-head">
-            <div><span class="card-num">01</span><h3>Qwen Image 2.1 文生图</h3></div>
-            <span class="tag">2K native</span>
+            <div><span class="card-num">01</span><h3>文字 → 图片</h3></div>
+            <span class="tag">Qwen 2.1 · 2K</span>
           </div>
+
+          <div class="chips" id="promptTemplates" role="group" aria-label="提示词模板">
+            <button type="button" class="chip" data-template="statue">微缩雕像</button>
+            <button type="button" class="chip" data-template="creature">生物 / 怪物</button>
+            <button type="button" class="chip" data-template="mech">机械 / 机甲</button>
+            <button type="button" class="chip" data-template="prop">道具 / 摆件</button>
+            <button type="button" class="chip" data-template="terrain">建筑 / 场景件</button>
+          </div>
+
           <label class="field">
-            <span>主体描述</span>
-            <input id="subject" placeholder="例：一条盘踞在圆形底座上的东方龙，鳞片清晰" />
+            <span>主体描述（中文或英文都可以）</span>
+            <input id="subject" placeholder="例：一条盘踞在圆形底座上的东方龙，鳞片清晰" maxlength="1200" />
           </label>
           <label class="field">
             <span>风格与细节</span>
-            <textarea id="stylePrompt" rows="4">miniature statue, highly detailed scales, dynamic pose, compact single subject, integrated circular base, clean silhouette, neutral background, no text, no watermark, designed for 3D printing</textarea>
+            <textarea id="stylePrompt" rows="3">miniature statue, highly detailed scales, dynamic pose, compact single subject, integrated circular base, clean silhouette, neutral background, no text, no watermark, designed for 3D printing</textarea>
           </label>
+
+          <div class="prompt-meta">
+            <span id="promptCount" class="mono">0 / 4000</span>
+            <button class="link" id="btnPromptPreview" type="button">检查最终提示词</button>
+          </div>
+          <div class="prompt-preview" id="promptPreview" hidden></div>
+
+          <details class="advanced">
+            <summary>高级：规避项与随机种子</summary>
+            <label class="field">
+              <span>规避项（逗号分隔，会被并入正向提示词）</span>
+              <textarea id="avoidPrompt" rows="2" placeholder="例如：底座镂空、细长尾巴、手持武器"></textarea>
+            </label>
+            <div class="row">
+              <label class="field compact grow-field"><span>随机种子（留空为随机）</span><input id="qwenSeed" inputmode="numeric" placeholder="随机" /></label>
+              <button class="btn small ghost" id="btnRandomSeed" type="button">随机</button>
+            </div>
+            <p class="hint-line">该工作流 CFG=1，负向提示词不生效，所以规避项会写进正向提示词。同一个种子可复现同一张图。</p>
+          </details>
+
           <div class="row">
             <label class="field compact">
               <span>分辨率</span>
@@ -268,24 +325,53 @@
             <button class="btn small ghost" data-action="comfy.open">打开 ComfyUI</button>
             <button class="btn small ghost" data-action="folder.open" data-target="comfyOutput">打开输出目录</button>
             <button class="btn small link" id="btnCopyPrompt">复制提示词</button>
+            <button class="btn small link" id="btnLoadPromptFile">导入 .txt 提示词</button>
           </div>
+          <input type="file" id="promptFileInput" accept=".txt,.md,.markdown,text/plain" hidden />
           <div class="callout" id="qwenResult">提示词会按「单一紧凑主体 + 一体化底座 + 可打印细节」组合，并写入 Qwen 工作流。</div>
         </article>
 
-        <article class="card">
+        <article class="card" id="imageCard">
           <div class="card-head">
             <div><span class="card-num">02</span><h3>图片 → 水密 3D 网格</h3></div>
             <span class="tag accent">TRELLIS.2</span>
           </div>
+
           <div class="dropzone" id="imageDrop">
-            <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp" hidden />
+            <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp" multiple hidden />
             <img id="imagePreview" class="image-preview" alt="已选择图片" hidden />
             <div class="drop-icon">▧</div>
             <b id="imageDropTitle">拖入生成图，或点击选择</b>
-            <small>PNG / JPG / WebP · 建议主体完整、背景干净、正面视角</small>
+            <small>PNG / JPG / WebP · 可一次拖入多张，或直接 Ctrl+V 粘贴 · 建议主体完整、背景干净、正面视角</small>
             <div class="file-line" id="imageFileLine" aria-live="polite">尚未选择图片</div>
             <small id="imagePreviewError" role="status"></small>
           </div>
+
+          <div class="pool" id="imagePool" hidden>
+            <div class="pool-head">
+              <span>候选图池 <b id="poolCount">0</b></span>
+              <button class="link" id="btnPoolClear" type="button">清空列表</button>
+            </div>
+            <div class="pool-grid" id="poolGrid" role="listbox" aria-label="候选图片"></div>
+            <p class="hint-line">点缩略图切换「当前使用」的图片；灰色角标是自动评估的适配度。</p>
+          </div>
+
+          <div class="analysis" id="imageAnalysis" hidden>
+            <div class="analysis-head">
+              <div class="score" id="analysisScore"><b>—</b><small>适配度</small></div>
+              <div class="analysis-copy">
+                <b id="analysisTitle">图片分析</b>
+                <p id="analysisText"></p>
+                <div class="analysis-chips" id="analysisChips"></div>
+              </div>
+            </div>
+            <ul class="finding-list" id="findingList"></ul>
+            <div class="analysis-actions">
+              <button class="btn small ghost" id="btnVlmCaption" type="button" hidden>用视觉模型写提示词</button>
+              <button class="btn small link" id="btnReinspect" type="button">重新分析</button>
+            </div>
+          </div>
+
           <div class="segmented" id="meshPreset">
             <button data-preset="1k">1K<small>6–8 GB</small></button>
             <button data-preset="1.5k" class="active">1.5K<small>8–16 GB</small></button>
@@ -404,7 +490,7 @@
     <section class="section" id="print">
       <div class="section-head">
         <div>
-          <div class="kicker">STEP 04 / SLICE & PRINT</div>
+          <div class="kicker">STEP 04 / SLICE &amp; PRINT</div>
           <h2>CHITUBOX 切片检查清单</h2>
           <p>视频里的参数不是万能配方。下面是可以直接照做的起点，最终以你的打印机、树脂和曝光测试为准。</p>
         </div>
@@ -431,10 +517,12 @@
       <div class="faq-grid">
         <details open><summary>为什么一定要水密（watertight）？</summary><p>光固化切片器需要明确区分「实体内部」与「外部」。有破洞、悬浮面或内外壳的网格会让切片出现空洞、缺层或错误支撑。WTiVo 用稀疏体素场重建闭合网格，Fast Merge 再焊掉重复顶点。</p></details>
         <details><summary>1K、1.5K、2K 怎么选？</summary><p>6–8 GB 显存选 1K；8–16 GB 选 1.5K（视频作者最推荐，速度与细节平衡）；16 GB+ 显存且 32 GB+ 内存再选 2K。2K 的 WTiVo 会绕过 Quad Reconstruct，代理点 25M，网格可达 4300 万面。</p></details>
+        <details><summary>什么样的图最适合转网格？</summary><p>单一紧凑主体、正面或 3/4 视角、背景干净、画幅接近 1:1、短边不低于 900 px。页面上的「适配度」就是按这几条打分的；低于 60 分时建议先换图，而不是硬转。</p></details>
         <details><summary>Blender 报错 / 找不到路径？</summary><p>工作流里的 Blender 路径不要带首尾双引号；建议使用干净安装的 Blender，避免 Auto-Rig Pro、PolyQuilt 等插件在无头模式报错。也可以下载 Blender ZIP，在 blender.exe 旁建一个空文件夹 <code>portable</code>。</p></details>
         <details><summary>导出的 STL 为什么在 CHITUBOX 里很小？</summary><p>Blender 的 1 单位与 STL 数值没有单位语义。视频里的做法是保持比例 1 导出，再在 CHITUBOX 里把 100 改成 10000。本工具会直接按目标毫米高度缩放，通常不需要再改。</p></details>
         <details><summary>生成结果有洞怎么办？</summary><p>先换随机种子重跑（结构种子默认 randomize）。仍失败时，把修复模式改为「体素重建」，或提高 WTiVo 的 lambda_fill（小洞 10–20，大洞 30–40）。注意过高的 lambda_fill 会封住本该保留的开口。</p></details>
         <details><summary>显卡不是 NVIDIA 能用吗？</summary><p>视频方案基于 CUDA 12.8，仅支持 NVIDIA RTX 20 系及以上。AMD ROCm 版本仍在开发；也可考虑云端 GPU，但不再是「100% 本地」。</p></details>
+        <details><summary>「视觉模型」是什么？一定要装吗？</summary><p>不需要。它是可选的本地视觉模型（Ollama / LM Studio 的 OpenAI 兼容接口），只用来把一张图反推成提示词，方便「改一点再生成」。不配置时，图片分析仍会给出分辨率、画幅与压缩的确定性判断。</p></details>
       </div>
     </section>
 
@@ -443,6 +531,7 @@
       <div class="footer-links">
         <button class="link" data-action="open.path" data-path="README.md">README</button>
         <button class="link" data-action="open.path" data-path="docs/部署指南.md">部署指南</button>
+        <button class="link" data-action="open.path" data-path="docs/多模态输入.md">多模态说明</button>
         <button class="link" data-action="shortcut.create">创建桌面快捷方式</button>
       </div>
     </footer>
@@ -464,6 +553,21 @@
           <select id="cfgRepair"><option value="auto">自动</option><option value="fill">仅补洞</option><option value="voxel">体素重建</option><option value="none">不修复</option></select>
         </label>
       </div>
+
+      <div class="drawer-section">
+        <div class="drawer-section-head">
+          <b>视觉模型（可选）</b>
+          <span>把图片反推成提示词</span>
+        </div>
+        <label class="field"><span>OpenAI 兼容地址（留空即关闭）</span><input id="cfgVlmUrl" placeholder="http://127.0.0.1:11434/v1" /></label>
+        <label class="field"><span>模型名（留空自动挑选视觉模型）</span><input id="cfgVlmModel" placeholder="qwen2.5vl:7b" /></label>
+        <div class="vlm-probe">
+          <button class="btn small ghost" id="btnVlmProbe" type="button">检测连接</button>
+          <span id="vlmProbeResult">未检测</span>
+        </div>
+        <p class="hint-line">只在本机运行模型时才有意义。地址留空时页面会隐藏「看图写提示词」按钮，其它功能不受影响。</p>
+      </div>
+
       <button class="btn primary wide" id="btnSaveSettings">保存设置</button>
       <div class="drawer-note">配置保存在本包 <code>config/config.json</code>。移动包体后请同步修改路径。</div>
       <div class="drawer-actions">
@@ -487,6 +591,15 @@
     </div>
     <div class="progress" id="jobProgressBar" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="jobProgress"></div></div>
     <div class="job-detail" id="jobDetail"></div>
+    <div class="job-error" id="jobError" role="alert" hidden>
+      <b id="jobErrorTitle">任务没有完成</b>
+      <p id="jobErrorText"></p>
+      <div class="job-error-actions">
+        <button class="btn small" id="btnJobRetry" type="button">重试</button>
+        <button class="btn small ghost" id="btnJobCopyError" type="button">复制错误</button>
+        <button class="btn small ghost" id="btnJobDismissError" type="button">忽略</button>
+      </div>
+    </div>
     <pre class="job-log" id="jobLog" aria-label="任务日志" hidden></pre>
   </section>
 

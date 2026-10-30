@@ -41,7 +41,15 @@ import {
   runTrellisInstaller,
   startComfyUI,
 } from './lib/installer.mjs';
-import { preparePixelWorkflow, prepareQwenWorkflow, installVendorWorkflows, listWorkflowFiles, presetInfo } from './lib/workflows.mjs';
+import { preparePixelWorkflow, prepareQwenWorkflow, installVendorWorkflows, listWorkflowFiles } from './lib/workflows.mjs';
+import {
+  buildPrompt,
+  inspectImageFile,
+  listInputPool,
+  vlmCaption,
+  vlmStatus,
+} from './lib/multimodal.mjs';
+import { LIMITS, PRESET_KEYS, assertPreset, presetsPublic, presetInfo } from './lib/presets.mjs';
 import { runPostprocess, verifyStlFile } from './lib/postprocess.mjs';
 import { analyzeStl } from './lib/stl.mjs';
 import {
@@ -162,8 +170,9 @@ const MIME = {
 };
 
 const MAX_UPLOAD = {
-  input: 40 * 1024 ** 2,
-  glb: 4 * 1024 ** 3,
+  input: LIMITS.uploadImage,
+  glb: LIMITS.uploadGlb,
+  text: LIMITS.uploadText,
 };
 
 const STATIC_CSP = [
@@ -380,6 +389,36 @@ function userPath(p) {
 }
 
 /**
+ * 多模态入口只允许读写工作目录内的文件。
+ *
+ * 页面上出现的路径全部来自上传接口（已经落在 workspace 里），所以越界请求
+ * 只可能是手写请求或页面 bug。这里直接拒绝，而不是「尽力打开」。
+ */
+function workspacePathOrThrow(value) {
+  const raw = String(value || '').replace(/^"|"$/g, '').trim();
+  if (!raw) {
+    throw new AppError(ERROR_CODES.INVALID, '缺少文件路径', {
+      hint: '先在页面上导入图片，再执行这一步。',
+    });
+  }
+  const full = resolve(raw);
+  const ws = resolve(resolveWorkspace(loadConfig()));
+  if (!isInside(ws, full)) {
+    throw new AppError(ERROR_CODES.PATH_OUTSIDE, `路径不在工作目录内：${full}`, {
+      status: 403,
+      hint: `只允许读取 ${ws} 下的文件；请重新导入。`,
+    });
+  }
+  if (!existsSync(full)) {
+    throw new AppError(ERROR_CODES.NOT_FOUND, `文件不存在：${full}`, {
+      status: 404,
+      hint: '文件可能已被移动或删除，请重新导入。',
+    });
+  }
+  return full;
+}
+
+/**
  * ComfyUI/output can accumulate tens of thousands of preview images. The GLB
  * scan is bounded so "导入最新 GLB" never turns into a multi-second freeze.
  */
@@ -456,6 +495,13 @@ function uploadSignatureOk(path, name, kind) {
     const head = Buffer.alloc(12);
     const read = readSync(fd, head, 0, head.length, 0);
     if (read < 4) return false;
+    if (kind === 'text') {
+      // 文本提示词文件：前 512 字节里出现 NUL 就不是文本（多半是改了扩展名的
+      // 二进制文件），直接拒掉，避免把乱码塞进提示词输入框。
+      const probe = Buffer.alloc(512);
+      const n = readSync(fd, probe, 0, probe.length, 0);
+      return !probe.subarray(0, n).includes(0);
+    }
     if (kind === 'input') {
       if (/\.png$/i.test(name)) {
         return head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
@@ -481,18 +527,7 @@ function uploadSignatureOk(path, name, kind) {
 }
 
 const HEAVY_JOB_TYPES = ['install', 'install.oneclick', 'install.qwen'];
-const PRESET_KEYS = ['1k', '1.5k', '2k'];
-const MAX_PROMPT = 4000;
-
-/** Reject an unknown VRAM preset instead of silently falling back to 1.5K. */
-function assertPreset(value, fallback) {
-  if (value === undefined || value === null || value === '') return fallback;
-  const preset = String(value).toLowerCase();
-  if (!PRESET_KEYS.includes(preset)) {
-    throw new Error(`显存档位只能是 ${PRESET_KEYS.join(' / ')}，收到：${String(value)}`);
-  }
-  return preset;
-}
+const MAX_PROMPT = LIMITS.promptChars;
 
 /**
  * Run a task that finishes inside the request (opening an installer window,
@@ -606,6 +641,59 @@ async function handleAction(action, payload = {}) {
 
     case 'models.scan':
       return { reuse: reuseSummary() };
+
+    // ---- 多模态输入（v2.0） -------------------------------------------
+    case 'image.inspect': {
+      const path = workspacePathOrThrow(payload.path || loadConfig().lastImage);
+      const preset = assertPreset(payload.preset, '1.5k');
+      return { image: await inspectImageFile(path, { preset }) };
+    }
+
+    case 'image.pool': {
+      const pool = await listInputPool(resolveWorkspace(loadConfig()), { limit: payload.limit });
+      return { pool, active: loadConfig().lastImage || '' };
+    }
+
+    case 'image.forget': {
+      const path = workspacePathOrThrow(payload.path);
+      const inputDir = resolve(join(resolveWorkspace(loadConfig()), 'input'));
+      if (!isInside(inputDir, path) || resolve(path) === inputDir) {
+        throw new AppError(ERROR_CODES.FORBIDDEN, '只能从候选池移除 input 目录里的图片', {
+          status: 403,
+          hint: '其它目录的文件请用资源管理器删除。',
+        });
+      }
+      unlinkSync(path);
+      if (resolve(loadConfig().lastImage || '') === resolve(path)) saveConfig({ lastImage: '' });
+      return { removed: path };
+    }
+
+    case 'prompt.build':
+      return {
+        prompt: buildPrompt({
+          subject: payload.subject,
+          style: payload.style,
+          avoid: payload.avoid,
+          preset: assertPreset(payload.preset, '2k'),
+          material: payload.material === 'fdm' ? 'fdm' : 'resin',
+          scaffold: payload.scaffold !== false,
+        }),
+      };
+
+    case 'vlm.status': {
+      const timeoutMs = Math.min(8000, Math.max(600, Number(payload.timeoutMs) || 2500));
+      return { vlm: await vlmStatus(loadConfig(), { timeoutMs }) };
+    }
+
+    case 'vlm.caption': {
+      const path = workspacePathOrThrow(payload.path || loadConfig().lastImage);
+      const caption = await vlmCaption({
+        path,
+        config: loadConfig(),
+        prompt: typeof payload.prompt === 'string' ? payload.prompt : '',
+      });
+      return { caption };
+    }
 
     case 'install.qwenModels': {
       const running = jobs.hasRunning('install.qwen');
@@ -788,6 +876,8 @@ async function handleAction(action, payload = {}) {
         preset: assertPreset(payload.preset, '2k'),
         seed,
       });
+      // 记住最近一次真的写进工作流的提示词，刷新页面后可以继续微调。
+      if (prompt) saveConfig({ lastPrompt: prompt });
       return { result };
     }
 
@@ -952,12 +1042,29 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/state' && req.method === 'GET') {
+      const cfg = loadConfig();
       sendJson(res, 200, {
         ok: true,
         version: VERSION,
         config: publicConfig(),
         checks: await checkEnvironment(),
         jobs: jobs.list(),
+        // 档位与上限只在服务端定义一次，页面据此渲染，避免前后端各写一套数字。
+        presets: presetsPublic(),
+        limits: {
+          promptChars: LIMITS.promptChars,
+          avoidChars: LIMITS.avoidChars,
+          poolSize: LIMITS.poolSize,
+          uploadImage: LIMITS.uploadImage,
+          uploadGlb: LIMITS.uploadGlb,
+          uploadText: LIMITS.uploadText,
+          vlmImage: LIMITS.vlmImage,
+        },
+        features: {
+          multimodal: true,
+          poolSize: LIMITS.poolSize,
+          vlm: { enabled: Boolean(cfg.vlmUrl), endpoint: cfg.vlmUrl || '', model: cfg.vlmModel || '' },
+        },
       });
       return;
     }
@@ -986,10 +1093,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/upload' && req.method === 'POST') {
-      const kind = url.searchParams.get('kind') === 'glb' ? 'glb' : 'input';
-      let name = safeName(url.searchParams.get('name') || (kind === 'glb' ? 'model.glb' : 'image.png'));
+      const kindParam = url.searchParams.get('kind');
+      const kind = kindParam === 'glb' ? 'glb' : kindParam === 'text' ? 'text' : 'input';
+      const fallbackName = kind === 'glb' ? 'model.glb' : kind === 'text' ? 'prompt.txt' : 'image.png';
+      let name = safeName(url.searchParams.get('name') || fallbackName);
       if (kind === 'glb' && !/\.(glb|gltf)$/i.test(name)) throw new Error('只接受 .glb / .gltf');
       if (kind === 'input' && !/\.(png|jpe?g|webp)$/i.test(name)) throw new Error('只接受 png / jpg / webp');
+      if (kind === 'text' && !/\.(txt|md|markdown)$/i.test(name)) throw new Error('只接受 .txt / .md 文本文件');
       const max = MAX_UPLOAD[kind];
       const declared = Number(req.headers['content-length'] || 0);
       if (declared > max) {
@@ -1039,9 +1149,14 @@ const server = http.createServer(async (req, res) => {
         if (tooLarge) throw Object.assign(new Error(`文件过大：上限 ${formatBytes(max)}`), { status: 413 });
         if (received === 0) throw new Error('上传文件为空');
         if (!uploadSignatureOk(temp, name, kind)) {
-          throw Object.assign(new Error('文件内容与扩展名不匹配，请确认选择的是真实的 PNG / JPEG / WebP / GLB 文件。'), {
-            status: 400,
-          });
+          throw Object.assign(
+            new Error(
+              kind === 'text'
+                ? '这个文件看起来不是纯文本（包含二进制内容），请换成 .txt / .md。'
+                : '文件内容与扩展名不匹配，请确认选择的是真实的 PNG / JPEG / WebP / GLB 文件。',
+            ),
+            { status: 400 },
+          );
         }
         // Preserve earlier inputs and avoid Windows file locks when the user
         // selects a file that already lives in this workspace directory.
@@ -1063,8 +1178,13 @@ const server = http.createServer(async (req, res) => {
       }
       const size = statSync(dest).size;
       if (kind === 'glb') saveConfig({ lastGlb: dest });
-      else saveConfig({ lastImage: dest });
-      sendJson(res, 200, { ok: true, path: dest, name, size, formatted: formatBytes(size) });
+      else if (kind === 'input') saveConfig({ lastImage: dest });
+      const payload = { ok: true, kind, path: dest, name, size, formatted: formatBytes(size) };
+      if (kind === 'text') {
+        // 直接把正文回给页面，省一次往返；文件同时留在 workspace/text 里备查。
+        payload.text = readFileSync(dest, 'utf8').slice(0, LIMITS.promptChars * 2);
+      }
+      sendJson(res, 200, payload);
       return;
     }
 
@@ -1096,6 +1216,18 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       sendWorkspaceFile(req, res, path, { download: true });
+      return;
+    }
+
+    if (url.pathname === '/api/client-log' && req.method === 'POST') {
+      // 页面端的未捕获异常直接落进 server.log，用户点「复制诊断信息」时
+      // 就能带上前端现场，不必再让他复现一次。
+      const body = await readJson(req, 64 * 1024).catch(() => ({}));
+      const message = String(body.message || '').slice(0, 500);
+      const stack = String(body.stack || '').slice(0, 4000);
+      const where = String(body.where || '').slice(0, 300);
+      if (message) logLine('warn', `页面错误${where ? ` @ ${where}` : ''}：${message}`, stack);
+      sendJson(res, 200, { ok: true });
       return;
     }
 

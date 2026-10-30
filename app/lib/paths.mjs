@@ -41,6 +41,7 @@ export function ensureDirs() {
     join(WORKSPACE_DIR, 'glb'),
     join(WORKSPACE_DIR, 'stl'),
     join(WORKSPACE_DIR, 'reports'),
+    join(WORKSPACE_DIR, 'text'),
     WORKFLOWS_DIR,
   ]) {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });

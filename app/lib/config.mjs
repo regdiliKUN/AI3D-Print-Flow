@@ -16,13 +16,14 @@ import {
   ensureDirs,
   resolveInstallRoot,
 } from './paths.mjs';
+import { PRESET_KEYS } from './presets.mjs';
 
 let cached = null;
 
-const PRESETS = new Set(['1k', '1.5k', '2k']);
+const PRESETS = new Set(PRESET_KEYS);
 const REPAIR_MODES = new Set(['auto', 'voxel', 'fill', 'none']);
 const PATH_KEYS = ['installRoot', 'comfyuiRoot', 'blenderPath', 'chituboxPath', 'workspaceDir'];
-const LAST_KEYS = ['lastImage', 'lastGlb', 'lastStl', 'lastReport'];
+const LAST_KEYS = ['lastImage', 'lastGlb', 'lastStl', 'lastReport', 'lastPrompt'];
 const ALLOWED_KEYS = new Set([
   'version',
   ...PATH_KEYS,
@@ -33,6 +34,8 @@ const ALLOWED_KEYS = new Set([
   'decimateRatio',
   'port',
   'comfyUrl',
+  'vlmUrl',
+  'vlmModel',
 ]);
 
 function readJson(path) {
@@ -61,6 +64,26 @@ function cleanText(value, max = 4096) {
     throw new Error('文本包含非法字符或长度超出限制。');
   }
   return text;
+}
+
+/**
+ * 视觉模型只接受 http/https 的裸端点（不含查询串）。空字符串是合法的，
+ * 表示「不启用」，不要因此报错。
+ */
+function cleanVlmUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  let url;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error('视觉模型地址不是有效 URL，例如 http://127.0.0.1:11434/v1。');
+  }
+  if (!/^https?:$/.test(url.protocol)) {
+    throw new Error('视觉模型地址必须以 http:// 或 https:// 开头。');
+  }
+  url.hash = '';
+  url.search = '';
+  return url.toString().replace(/\/$/, '');
 }
 
 function cleanComfyUrl(value) {
@@ -139,6 +162,12 @@ export function validateConfigPatch(patch) {
   if (Object.hasOwn(patch, 'comfyUrl')) {
     clean.comfyUrl = cleanComfyUrl(patch.comfyUrl);
   }
+  if (Object.hasOwn(patch, 'vlmUrl')) {
+    clean.vlmUrl = cleanVlmUrl(patch.vlmUrl);
+  }
+  if (Object.hasOwn(patch, 'vlmModel')) {
+    clean.vlmModel = cleanText(patch.vlmModel, 120) ?? '';
+  }
   if (Object.hasOwn(patch, 'version')) {
     const value = Number(patch.version);
     if (!Number.isInteger(value) || value < 1) throw new Error('配置版本号无效。');
@@ -192,6 +221,8 @@ export function loadConfig() {
   if (!Number.isFinite(Number(config.decimateRatio))) config.decimateRatio = 0;
   if (!Number.isInteger(Number(config.port))) config.port = 17860;
   if (!config.comfyUrl) config.comfyUrl = 'http://127.0.0.1:8188';
+  if (typeof config.vlmUrl !== 'string') config.vlmUrl = '';
+  if (typeof config.vlmModel !== 'string') config.vlmModel = '';
   cached = config;
   return config;
 }
@@ -246,9 +277,12 @@ export function publicConfig() {
     decimateRatio: c.decimateRatio,
     port: c.port,
     comfyUrl: c.comfyUrl,
+    vlmUrl: c.vlmUrl,
+    vlmModel: c.vlmModel,
     lastImage: c.lastImage,
     lastGlb: c.lastGlb,
     lastStl: c.lastStl,
     lastReport: c.lastReport,
+    lastPrompt: c.lastPrompt,
   };
 }
