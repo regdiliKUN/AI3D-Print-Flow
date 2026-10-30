@@ -1676,22 +1676,31 @@ details.advanced[open] > summary { margin-bottom: 4px; }
 
 .pool-remove {
   position: absolute;
+  z-index: 1;
   top: 2px;
   right: 2px;
   display: grid;
   place-items: center;
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.66);
+  background: rgba(0, 0, 0, 0.72);
   color: var(--muted);
   font-size: 12px;
   line-height: 1;
+  cursor: pointer;
   opacity: 0;
   transition: 140ms ease;
 }
-.pool-item:hover .pool-remove { opacity: 1; }
+.pool-item:hover .pool-remove,
+.pool-item:focus-within .pool-remove,
+.pool-remove:focus-visible { opacity: 1; }
 .pool-remove:hover { background: var(--danger); color: #fff; }
+@media (hover: none) {
+  .pool-remove { opacity: 0.75; }
+}
 
 /* ---------- 图片分析 ---------- */
 

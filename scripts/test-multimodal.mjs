@@ -410,6 +410,19 @@ try {
     assert.ok(Array.isArray(img.findings) && img.findings.length > 0);
   });
 
+  await check('GET /api/file 支持 ETag 条件请求', async () => {
+    const url = `${base}/api/file?path=${encodeURIComponent(good.body.path)}`;
+    const first = await fetch(url);
+    assert.equal(first.status, 200);
+    const etag = first.headers.get('etag');
+    assert.ok(etag, '缺少 ETag');
+    assert.match(first.headers.get('cache-control') || '', /no-cache/);
+    assert.ok((await first.arrayBuffer()).byteLength > 0);
+    const second = await fetch(url, { headers: { 'If-None-Match': etag } });
+    assert.equal(second.status, 304);
+    assert.equal((await second.arrayBuffer()).byteLength, 0);
+  });
+
   await check('分辨率过低的图片被判为 risk', async () => {
     const res = await post('image.inspect', { path: tiny.body.path, preset: '1.5k' });
     assert.equal(res.status, 200);

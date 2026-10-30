@@ -339,10 +339,16 @@ function workspaceFile(urlPath) {
 function sendWorkspaceFile(req, res, path, { download = false } = {}) {
   const stat = statSync(path);
   const ext = extname(path).toLowerCase();
+  // 文件名由上传逻辑保证不覆盖，但用户也可能手动替换文件；用「大小 + 修改
+  // 时间」做 ETag，浏览器可以缓存缩略图，重新验证时只付一个 304。
+  const etag = `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+  const lastModified = stat.mtime.toUTCString();
   const headers = {
     'Content-Type': download ? 'application/octet-stream' : MIME[ext] || 'application/octet-stream',
-    'Cache-Control': 'no-store',
+    'Cache-Control': 'private, no-cache',
     'Accept-Ranges': 'bytes',
+    ETag: etag,
+    'Last-Modified': lastModified,
   };
   if (download) {
     const filename = path.split(/[\\/]/).pop();
@@ -355,6 +361,16 @@ function sendWorkspaceFile(req, res, path, { download = false } = {}) {
   let status = 200;
   const range = String(req.headers.range || '');
   const match = range.match(/^bytes=(\d*)-(\d*)$/);
+  if (!range && req.headers['if-none-match'] === etag) {
+    securityHeaders(res);
+    res.writeHead(304, {
+      'Cache-Control': headers['Cache-Control'],
+      ETag: etag,
+      'Last-Modified': lastModified,
+    });
+    res.end();
+    return;
+  }
   if (match && stat.size > 0) {
     if (match[1]) start = Number(match[1]);
     if (match[2]) end = Number(match[2]);

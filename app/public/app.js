@@ -210,6 +210,7 @@ const state = {
   lastError: '',
   // 多模态
   pool: [],
+  poolScoring: false,
   analysis: null,
   inspectedPath: '',
   inspectedPreset: '',
@@ -1627,7 +1628,9 @@ function updatePreset(preset) {
   // 档位变了，之前的「适配度」是按旧档位算的，需要重算。
   state.inspectedPreset = '';
   renderMeshFlow();
+  renderPool();
   if (activeImage()) setTimeout(() => inspectActiveImage({ silent: true }), 120);
+  queuePoolScoring(400);
   renderNextStep();
 }
 
@@ -1826,6 +1829,21 @@ function mergeAnalysis(server, pixels) {
   return { ...server, summary, findings, score, level, pixels: pixels || null };
 }
 
+async function analyzeImagePath(image) {
+  const data = await api('image.inspect', { path: image, preset: state.meshPreset });
+  const server = data.image;
+  if (!server) return null;
+  // 像素统计是增强项：拿不到（无 canvas / 跨域）就只用服务端结论。
+  let pixels = null;
+  if (state.pixelStats && state.pixelStats.path === image) {
+    pixels = state.pixelStats.stats;
+  } else {
+    pixels = await analyzePixels(`/api/file?path=${encodeURIComponent(image)}`).catch(() => null);
+    state.pixelStats = { path: image, stats: pixels };
+  }
+  return mergeAnalysis(server, pixels);
+}
+
 async function inspectActiveImage({ silent = true } = {}) {
   const image = activeImage();
   if (!image) {
@@ -1836,22 +1854,13 @@ async function inspectActiveImage({ silent = true } = {}) {
   state.inspectedPath = image;
   state.inspectedPreset = state.meshPreset;
   try {
-    const data = await api('image.inspect', { path: image, preset: state.meshPreset });
-    const server = data.image;
-    if (!server) return null;
-    // 像素统计是增强项：拿不到（无 canvas / 跨域）就只用服务端结论。
-    let pixels = null;
-    if (state.pixelStats && state.pixelStats.path === image) {
-      pixels = state.pixelStats.stats;
-    } else {
-      pixels = await analyzePixels(`/api/file?path=${encodeURIComponent(image)}`).catch(() => null);
-      state.pixelStats = { path: image, stats: pixels };
-    }
-    state.analysis = mergeAnalysis(server, pixels);
+    const analysis = await analyzeImagePath(image);
+    if (!analysis) return null;
+    state.analysis = analysis;
     renderAnalysis();
-    updatePoolAnalysis(image, state.analysis);
+    updatePoolAnalysis(image, analysis);
     renderNextStep();
-    return state.analysis;
+    return analysis;
   } catch (err) {
     state.analysis = null;
     renderAnalysis();
@@ -1924,25 +1933,65 @@ function renderPool() {
   box.hidden = false;
   setText('poolCount', String(state.pool.length));
   const current = activeImage();
+  // 重绘会替换节点；如果焦点原本在候选池里，把它放回同一张图（或新的
+  // 第一张），否则键盘用户每次按 Enter 选图都会掉回页面顶部。
+  const focusedPath = typeof grid.contains === 'function' && grid.contains(document.activeElement)
+    ? document.activeElement.closest('[data-pool]')?.dataset.pool || ''
+    : '';
   grid.innerHTML = state.pool
     .map((item) => {
       const active = item.path === current;
-      const score = item.analysis ? item.analysis.score : null;
-      const level = item.analysis ? item.analysis.level : '';
-      return `<button type="button" class="pool-item${active ? ' active' : ''}" role="option" aria-selected="${active}" data-pool="${escapeHtml(item.path)}" title="${escapeHtml(`${item.name}\n${item.path}`)}">
+      // 档位变化后旧分数不再成立，先隐藏，后台会按新档位重新评估。
+      const analysis = item.analysis?.preset === state.meshPreset ? item.analysis : null;
+      const score = analysis ? analysis.score : null;
+      const level = analysis ? analysis.level : '';
+      return `<div class="pool-item${active ? ' active' : ''}" role="option" aria-selected="${active}" tabindex="0" data-pool="${escapeHtml(item.path)}" title="${escapeHtml(`${item.name}\n${item.path}`)}">
         <img src="/api/file?path=${encodeURIComponent(item.path)}" alt="${escapeHtml(item.name)}" loading="lazy" />
         ${score != null ? `<span class="pool-score ${escapeHtml(level)}">${score}</span>` : ''}
-        <span class="pool-remove" data-pool-remove="${escapeHtml(item.path)}" role="button" tabindex="-1" title="从列表中移除">×</span>
-      </button>`;
+        <button type="button" class="pool-remove" data-pool-remove="${escapeHtml(item.path)}" aria-label="从候选池移除 ${escapeHtml(item.name)}" title="从列表中移除">×</button>
+      </div>`;
     })
     .join('');
+  if (focusedPath) {
+    const nodes = [...grid.querySelectorAll('[data-pool]')];
+    (nodes.find((node) => node.dataset.pool === focusedPath) || nodes[0])?.focus({ preventScroll: true });
+  }
 }
 
 function updatePoolAnalysis(path, analysis) {
   const item = state.pool.find((entry) => entry.path === path);
   if (!item) return;
   item.analysis = analysis;
+  delete item.scoreFailedPreset;
   renderPool();
+}
+
+/** 后台按当前档位给候选池补分数；一次只处理一张，避免同时解码多张大图。 */
+function queuePoolScoring(delay = 300) {
+  if (state.poolScoring) return;
+  state.poolScoring = true;
+  setTimeout(scoreNextPoolImage, delay);
+}
+
+async function scoreNextPoolImage() {
+  const current = activeImage();
+  const next = state.pool.find(
+    (item) => item.path !== current
+      && item.analysis?.preset !== state.meshPreset
+      && item.scoreFailedPreset !== state.meshPreset,
+  );
+  if (!next) {
+    state.poolScoring = false;
+    return;
+  }
+  try {
+    const analysis = await analyzeImagePath(next.path);
+    if (analysis) updatePoolAnalysis(next.path, analysis);
+    else next.scoreFailedPreset = state.meshPreset;
+  } catch {
+    next.scoreFailedPreset = state.meshPreset;
+  }
+  setTimeout(scoreNextPoolImage, 120);
 }
 
 function addToPool(entry) {
@@ -1950,21 +1999,23 @@ function addToPool(entry) {
   const limit = state.limits?.poolSize || 8;
   state.pool = [entry, ...state.pool.filter((item) => item.path !== entry.path)].slice(0, limit);
   renderPool();
+  queuePoolScoring(700);
 }
 
 async function loadPool() {
   try {
     const data = await api('image.pool', { limit: state.limits?.poolSize || 8 });
     const items = (data.pool?.items || []).map((item) => ({ ...item }));
-    if (!items.length) return;
     // 保留已有分析结果（按路径合并），避免刷新页面后角标全部消失。
     const known = new Map(state.pool.map((item) => [item.path, item]));
     state.pool = items.map((item) => ({ ...item, analysis: known.get(item.path)?.analysis || null }));
     renderPool();
+    if (!state.pool.length) return;
     const current = activeImage();
     if (current && !state.pool.some((item) => item.path === current)) {
       addToPool({ path: current, name: basename(current), size: 0, mtime: Date.now() });
     }
+    queuePoolScoring(500);
   } catch {
     // 候选池只是便利功能，加载失败不影响主流程。
   }
@@ -1978,10 +2029,13 @@ function selectPoolImage(path) {
   state.preparedMesh = null;
   state.analysis = null;
   renderSelections();
+  queuePoolScoring(500);
   setCallout('meshResult', `当前使用：${basename(path)}。确认档位后点击「② 创建水密工作流」。`, 'ok');
 }
 
 async function removeFromPool(path) {
+  const removed = state.pool.find((item) => item.path === path);
+  const removedAt = state.pool.indexOf(removed);
   state.pool = state.pool.filter((item) => item.path !== path);
   renderPool();
   try {
@@ -1991,8 +2045,16 @@ async function removeFromPool(path) {
       state.config = { ...state.config, lastImage: state.pool[0]?.path || '' };
       renderSelections();
     }
+    queuePoolScoring(200);
     toast('已从候选池和 input 目录移除', 'ok', 3000);
   } catch (err) {
+    // 删除失败时把缩略图放回原位，避免界面显示已删除、磁盘上却还在。
+    if (removed) {
+      const next = [...state.pool];
+      next.splice(Math.max(0, removedAt), 0, removed);
+      state.pool = next;
+      renderPool();
+    }
     toast(`移除失败：${humanizeError(err).title}`, 'warn', 6000);
   }
 }
@@ -2669,6 +2731,16 @@ async function handleAction(button) {
  * ------------------------------------------------------------------ */
 
 function bindEvents() {
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const target = event.target;
+    if (!target || target.nodeType !== 1) return;
+    if (target.closest('[data-pool-remove]')) return;
+    const poolItem = target.closest('[data-pool]');
+    if (!poolItem) return;
+    event.preventDefault();
+    selectPoolImage(poolItem.dataset.pool);
+  });
   document.addEventListener('click', (event) => {
     const scroll = event.target.closest('[data-scroll]');
     if (scroll) {
