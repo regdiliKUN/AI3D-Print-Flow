@@ -97,6 +97,10 @@ export const LIMITS = {
   vlmImage: 6 * MB,
   /** 单次视觉模型请求超时 */
   vlmTimeoutMs: 90_000,
+  /** 单边超过此值视为拼接图或损坏文件 */
+  imageMaxSide: 20_000,
+  /** 超过此像素数不再做转网格分析（100 MP） */
+  imageMaxPixels: 100_000_000,
 };
 
 export function presetsPublic() {

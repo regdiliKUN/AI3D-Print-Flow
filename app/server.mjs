@@ -607,9 +607,11 @@ async function handleAction(action, payload = {}) {
       return { checks: await checkEnvironment({ refresh: true }) };
 
     case 'config.save': {
-      const next = saveConfig(payload.patch || {});
+      saveConfig(payload.patch || {});
       invalidateChecks();
-      return { config: publicConfig(), saved: next };
+      // Never echo the sanitized config object: it contains vlmApiKey. The
+      // page only needs publicConfig(), which exposes vlmHasKey instead.
+      return { config: publicConfig() };
     }
 
     case 'install.oneclick': {
@@ -1063,7 +1065,12 @@ const server = http.createServer(async (req, res) => {
         features: {
           multimodal: true,
           poolSize: LIMITS.poolSize,
-          vlm: { enabled: Boolean(cfg.vlmUrl), endpoint: cfg.vlmUrl || '', model: cfg.vlmModel || '' },
+          vlm: {
+            enabled: Boolean(cfg.vlmUrl),
+            endpoint: cfg.vlmUrl || '',
+            model: cfg.vlmModel || '',
+            hasKey: Boolean(cfg.vlmApiKey),
+          },
         },
       });
       return;

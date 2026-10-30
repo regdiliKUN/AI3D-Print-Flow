@@ -1,6 +1,6 @@
 {
   "name": "ai3d-print-flow",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "Local Windows console for Qwen-Image 2.1 + TRELLIS.2 + WTiVo + Blender + CHITUBOX image-to-print workflow",
   "type": "module",

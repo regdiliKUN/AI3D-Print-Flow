@@ -280,6 +280,7 @@ const ERROR_UI = {
   E_TOO_LARGE: { title: '文件超过大小上限', hint: '压缩或裁剪后再上传。' },
   E_IMAGE_INVALID: { title: '这张图无法解析', hint: '用画图 / Photoshop 重新导出为标准 PNG。' },
   E_IMAGE_TOO_SMALL: { title: '图片分辨率太低', hint: '换一张短边 1024 px 以上的图。' },
+  E_IMAGE_TOO_LARGE: { title: '图片过大', hint: '先裁剪或缩放到 2048 px 以内再导入。' },
   E_IMAGE_MISSING: { title: '找不到这张图', hint: '文件可能被移动或删除，重新导入一次。' },
   E_PROMPT_EMPTY: { title: '还没有写主体描述', hint: '至少写一句主体，例如「盘踞在圆底座上的东方龙」。' },
   E_PROMPT_TOO_LONG: { title: '提示词太长', hint: '删掉重复的风格形容词，保留最关键的 3–5 个。' },
@@ -643,6 +644,12 @@ function renderSettings() {
   set('cfgRepair', c.repairMode || 'auto');
   set('cfgVlmUrl', c.vlmUrl || '');
   set('cfgVlmModel', c.vlmModel || '');
+  const apiKey = $('#cfgVlmApiKey');
+  if (apiKey) {
+    // 密钥只在服务端保存。页面永远不拿到明文，只显示「已保存」。
+    apiKey.value = '';
+    apiKey.placeholder = c.vlmHasKey ? '已保存（留空保持不变）' : '留空表示不需要鉴权';
+  }
   const probe = $('#vlmProbeResult');
   if (probe) probe.textContent = state.vlm ? (state.vlm.available ? '已连接' : '连不上') : '未检测';
 }
@@ -2566,9 +2573,17 @@ async function saveSettings() {
     vlmUrl: $('#cfgVlmUrl')?.value.trim() || '',
     vlmModel: $('#cfgVlmModel')?.value.trim() || '',
   };
+  // 留空不改已保存的密钥；输入了新 Key 就随设置一起保存，避免用户点
+  // 「保存设置」时以为保存了、实际却丢掉。
+  const keyInput = $('#cfgVlmApiKey');
+  if (keyInput?.value.trim()) patch.vlmApiKey = keyInput.value.trim();
   try {
     const data = await api('config.save', { patch });
     state.config = data.config || state.config;
+    if (keyInput) {
+      keyInput.value = '';
+      keyInput.placeholder = state.config.vlmHasKey ? '已保存（留空保持不变）' : '留空表示不需要鉴权';
+    }
     // Explicit save: stored defaults are now the user's intent, so let the
     // post-process panel pick them up again.
     clearTouched();
@@ -2757,10 +2772,32 @@ function bindEvents() {
     // 先保存，再用新地址探测，避免「检测的是旧配置」。
     const url = $('#cfgVlmUrl')?.value.trim() || '';
     const model = $('#cfgVlmModel')?.value.trim() || '';
+    const keyInput = $('#cfgVlmApiKey');
+    const patch = { vlmUrl: url, vlmModel: model };
+    // 留空 = 不修改已保存的密钥；要清除请点「清除密钥」。
+    if (keyInput?.value.trim()) patch.vlmApiKey = keyInput.value.trim();
     try {
-      await api('config.save', { patch: { vlmUrl: url, vlmModel: model } });
-      state.config = { ...state.config, vlmUrl: url, vlmModel: model };
+      await api('config.save', { patch });
+      state.config = { ...state.config, vlmUrl: url, vlmModel: model, vlmHasKey: Boolean(patch.vlmApiKey || state.config.vlmHasKey) };
+      if (keyInput) {
+        keyInput.value = '';
+        keyInput.placeholder = state.config.vlmHasKey ? '已保存（留空保持不变）' : '留空表示不需要鉴权';
+      }
       await probeVlm({ announce: true });
+    } catch (err) {
+      toast(humanizeError(err).title, 'error', 7000);
+    }
+  });
+  $('#btnVlmClearKey')?.addEventListener('click', async () => {
+    try {
+      await api('config.save', { patch: { vlmApiKey: '' } });
+      state.config = { ...state.config, vlmHasKey: false };
+      const input = $('#cfgVlmApiKey');
+      if (input) {
+        input.value = '';
+        input.placeholder = '留空表示不需要鉴权';
+      }
+      toast('已清除视觉模型 API Key', 'ok', 4000);
     } catch (err) {
       toast(humanizeError(err).title, 'error', 7000);
     }

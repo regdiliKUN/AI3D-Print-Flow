@@ -561,8 +561,10 @@
         </div>
         <label class="field"><span>OpenAI 兼容地址（留空即关闭）</span><input id="cfgVlmUrl" placeholder="http://127.0.0.1:11434/v1" /></label>
         <label class="field"><span>模型名（留空自动挑选视觉模型）</span><input id="cfgVlmModel" placeholder="qwen2.5vl:7b" /></label>
+        <label class="field"><span>API Key（可选，只保存不回显）</span><input id="cfgVlmApiKey" type="password" autocomplete="off" placeholder="留空表示不需要鉴权" /></label>
         <div class="vlm-probe">
           <button class="btn small ghost" id="btnVlmProbe" type="button">检测连接</button>
+          <button class="btn small link" id="btnVlmClearKey" type="button">清除密钥</button>
           <span id="vlmProbeResult">未检测</span>
         </div>
         <p class="hint-line">只在本机运行模型时才有意义。地址留空时页面会隐藏「看图写提示词」按钮，其它功能不受影响。</p>

@@ -9,12 +9,13 @@
  *      文本上传、client-log，以及「工作目录之外的文件必须拒绝」这条安全边界。
  */
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { deflateSync } from 'node:zlib';
-import { readImageHeader } from '../app/lib/multimodal.mjs';
+import { inspectImageFile, readImageHeader } from '../app/lib/multimodal.mjs';
 import { buildPrompt, parseCaption } from '../app/lib/multimodal.mjs';
 
 let failed = 0;
@@ -112,6 +113,47 @@ await check('无法识别的字节返回 null 而不是抛错', () => {
   assert.equal(readImageHeader(Buffer.alloc(4)), null);
 });
 
+// 构造一张只有头的 PNG：IHDR + 任意块 + IEND。用于验证 tRNS 只在真正的
+// tRNS 块里生效，而不是在压缩数据里搜字符串。
+function pngWithChunks(width, height, colorType, chunks = [], idat = Buffer.from([0])) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = colorType;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    ...chunks,
+    pngChunk('IDAT', idat),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+await check('PNG 的 tRNS 只在真正的 tRNS 块里生效', () => {
+  // 压缩数据里刚好出现 "tRNS" 四个字节，不能被当成透明通道。
+  const fake = pngWithChunks(800, 800, 2, [], Buffer.from('xxxtRNSxxx'));
+  assert.equal(readImageHeader(fake).hasAlpha, false, 'IDAT 里的 tRNS 是误判');
+  const real = pngWithChunks(800, 800, 2, [pngChunk('tRNS', Buffer.from([0, 0, 0, 0, 0, 0]))]);
+  assert.equal(readImageHeader(real).hasAlpha, true, '真正的 tRNS 应该被识别');
+  // 带原生 alpha 的色彩类型不依赖 tRNS。
+  assert.equal(readImageHeader(pngWithChunks(800, 800, 6)).hasAlpha, true);
+});
+
+await check('超大尺寸图片在解码前就被拒绝', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ai3d-huge-'));
+  try {
+    const tooWide = join(dir, 'wide.png');
+    writeFileSync(tooWide, pngWithChunks(20_001, 100, 2));
+    await assert.rejects(() => inspectImageFile(tooWide), (err) => err.code === 'E_IMAGE_TOO_LARGE');
+    const tooMany = join(dir, 'many.png');
+    writeFileSync(tooMany, pngWithChunks(12_000, 12_000, 2));
+    await assert.rejects(() => inspectImageFile(tooMany), (err) => err.code === 'E_IMAGE_TOO_LARGE');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 /* ---------------------------------------------------------------- *
  * 2. 提示词构建
  * ---------------------------------------------------------------- */
@@ -190,6 +232,24 @@ await check('parseCaption 遇到自由文本时退化为整行主体', () => {
   const parsed = parseCaption('一只蹲伏的石像鬼，双翼半展。');
   assert.equal(parsed.structured, false);
   assert.match(parsed.subject, /石像鬼/);
+});
+
+await check('parseCaption 支持 JSON 与 Markdown 代码块', () => {
+  const fenced = parseCaption('```json\n{"subject":"石像鬼","style":"粗糙石质","details":["双翼","尾巴"]}\n```');
+  assert.equal(fenced.structured, true);
+  assert.equal(fenced.subject, '石像鬼');
+  assert.equal(fenced.style, '粗糙石质');
+  assert.equal(fenced.detail, '双翼，尾巴');
+  const english = parseCaption('{"object":"a gargoyle","style":"stone","detail":"wings, tail"}');
+  assert.equal(english.subject, 'a gargoyle');
+  assert.match(english.detail, /wings/);
+});
+
+await check('parseCaption 对 JSON 和自由文本都限制长度', () => {
+  const long = parseCaption(JSON.stringify({ subject: '龙'.repeat(500), style: '石'.repeat(500), detail: '鳞'.repeat(900) }));
+  assert.equal(long.subject.length, 300);
+  assert.equal(long.style.length, 300);
+  assert.equal(long.detail.length, 400);
 });
 
 /* ---------------------------------------------------------------- *
@@ -420,6 +480,64 @@ try {
     assert.equal(res.body.vlm.disabled, true);
     assert.equal(res.body.vlm.endpoint, '');
     assert.match(res.body.vlm.error, /未配置/);
+  });
+
+  await check('vlm.status 携带 Bearer Key，且显式模型不要求在列表中', async () => {
+    let authorization = '';
+    const fake = createServer((req, res) => {
+      authorization = String(req.headers.authorization || '');
+      if (req.url !== '/v1/models') {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end('{}');
+        return;
+      }
+      if (authorization !== 'Bearer sk-test-key') {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end('{"error":"unauthorized"}');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'qwen3:8b' }] }));
+    });
+    await new Promise((resolveReady, reject) => {
+      fake.once('error', reject);
+      fake.listen(0, '127.0.0.1', resolveReady);
+    });
+    try {
+      const { port: fakePort } = fake.address();
+      const endpoint = `http://127.0.0.1:${fakePort}/v1`;
+      await post('config.save', { patch: { vlmUrl: endpoint, vlmModel: 'my-vision-model', vlmApiKey: 'sk-test-key' } });
+      const res = await post('vlm.status', { timeoutMs: 2000 });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.vlm.available, true, JSON.stringify(res.body.vlm));
+      assert.equal(res.body.vlm.model, 'my-vision-model');
+      assert.equal(res.body.vlm.auth, true);
+      assert.equal(authorization, 'Bearer sk-test-key');
+
+      // 密钥只写不读：state / config.save 的响应里都不能出现明文。
+      const state = await (await fetch(`${base}/api/state`)).json();
+      assert.equal(state.config.vlmHasKey, true);
+      assert.equal(state.features.vlm.hasKey, true);
+      assert.ok(!Object.hasOwn(state.config, 'vlmApiKey'));
+      assert.ok(!JSON.stringify(state).includes('sk-test-key'));
+
+      const saved = await post('config.save', { patch: { vlmModel: 'my-vision-model' } });
+      assert.equal(saved.status, 200);
+      assert.ok(!JSON.stringify(saved.body).includes('sk-test-key'));
+      assert.ok(!Object.hasOwn(saved.body, 'saved'), 'config.save 不应回显完整配置');
+    } finally {
+      await new Promise((resolveClose) => fake.close(resolveClose));
+    }
+  });
+
+  await check('清除 vlmApiKey 后页面状态立即变为无密钥', async () => {
+    const saved = await post('config.save', { patch: { vlmApiKey: '', vlmUrl: '' } });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.body.config.vlmHasKey, false);
+    const state = await (await fetch(`${base}/api/state`)).json();
+    assert.equal(state.config.vlmHasKey, false);
+    assert.equal(state.features.vlm.hasKey, false);
+    assert.ok(!JSON.stringify(state).includes('sk-test-key'));
   });
 
   await check('client-log 接收页面错误且不报错', async () => {

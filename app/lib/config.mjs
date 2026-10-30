@@ -36,6 +36,7 @@ const ALLOWED_KEYS = new Set([
   'comfyUrl',
   'vlmUrl',
   'vlmModel',
+  'vlmApiKey',
 ]);
 
 function readJson(path) {
@@ -168,6 +169,10 @@ export function validateConfigPatch(patch) {
   if (Object.hasOwn(patch, 'vlmModel')) {
     clean.vlmModel = cleanText(patch.vlmModel, 120) ?? '';
   }
+  if (Object.hasOwn(patch, 'vlmApiKey')) {
+    // 密钥只写不读：publicConfig 不返回它，页面只知道「有没有配」。
+    clean.vlmApiKey = cleanText(patch.vlmApiKey, 200) ?? '';
+  }
   if (Object.hasOwn(patch, 'version')) {
     const value = Number(patch.version);
     if (!Number.isInteger(value) || value < 1) throw new Error('配置版本号无效。');
@@ -223,6 +228,7 @@ export function loadConfig() {
   if (!config.comfyUrl) config.comfyUrl = 'http://127.0.0.1:8188';
   if (typeof config.vlmUrl !== 'string') config.vlmUrl = '';
   if (typeof config.vlmModel !== 'string') config.vlmModel = '';
+  if (typeof config.vlmApiKey !== 'string') config.vlmApiKey = '';
   cached = config;
   return config;
 }
@@ -279,6 +285,7 @@ export function publicConfig() {
     comfyUrl: c.comfyUrl,
     vlmUrl: c.vlmUrl,
     vlmModel: c.vlmModel,
+    vlmHasKey: Boolean(c.vlmApiKey),
     lastImage: c.lastImage,
     lastGlb: c.lastGlb,
     lastStl: c.lastStl,

@@ -29,6 +29,7 @@ export const ERROR_CODES = {
   // 多模态与输入校验（v2.0）
   IMAGE_INVALID: 'E_IMAGE_INVALID',
   IMAGE_TOO_SMALL: 'E_IMAGE_TOO_SMALL',
+  IMAGE_TOO_LARGE: 'E_IMAGE_TOO_LARGE',
   IMAGE_MISSING: 'E_IMAGE_MISSING',
   PROMPT_EMPTY: 'E_PROMPT_EMPTY',
   PROMPT_TOO_LONG: 'E_PROMPT_TOO_LONG',
@@ -58,6 +59,7 @@ const DEFAULT_HINTS = {
   [ERROR_CODES.INTERNAL]: '详情已写入 logs/server.log。如果页面同时提示 Failed to fetch，请确认启动窗口未关闭。',
   [ERROR_CODES.IMAGE_INVALID]: '支持 PNG / JPG / WebP。若文件来自截图工具，请另存为标准 PNG 后重试。',
   [ERROR_CODES.IMAGE_TOO_SMALL]: '换一张更清晰的图，或在选图前把短边放大到 1024 px 以上。',
+  [ERROR_CODES.IMAGE_TOO_LARGE]: '先裁剪或缩放到 2048 px 以内再导入；转网格用不到超大原图。',
   [ERROR_CODES.IMAGE_MISSING]: '重新拖入图片，或点「② 创建水密工作流」前先确认预览已出现。',
   [ERROR_CODES.PROMPT_EMPTY]: '至少写一句主体描述，例如「盘踞在圆底座上的东方龙」。',
   [ERROR_CODES.PROMPT_TOO_LONG]: '把风格描述压缩到 4000 字符以内；过长的提示词会被模型截断。',

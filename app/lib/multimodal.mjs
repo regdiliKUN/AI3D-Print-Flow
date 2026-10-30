@@ -16,7 +16,7 @@
  * 设计约束：所有能力都必须有「没有它也能用」的降级路径。视觉模型不可用不是
  * 错误，只是一种能力缺失，页面据此隐藏按钮而不是弹红框。
  */
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, open, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { AppError, ERROR_CODES } from './errors.mjs';
@@ -44,10 +44,25 @@ export function readImageHeader(buf) {
     const width = buf.readUInt32BE(16);
     const height = buf.readUInt32BE(20);
     if (!width || !height) return null;
+    const bitDepth = buf[24] || 8;
     const colorType = buf[25];
-    // colorType 4 = 灰度+Alpha，6 = RGBA；调色板图片靠 tRNS 提供透明色。
-    const hasAlpha = colorType === 4 || colorType === 6 || buf.includes('tRNS');
-    return { format: 'png', width, height, hasAlpha, bitDepth: buf[24] || 8 };
+    // alpha 只由色彩类型或真正的 tRNS 块决定。旧实现直接在整段字节里搜
+    // "tRNS"，压缩数据里恰好出现这四个字符就会误判；这里按块遍历。
+    let hasAlpha = colorType === 4 || colorType === 6;
+    let offset = 8;
+    while (offset + 12 <= buf.length) {
+      const length = buf.readUInt32BE(offset);
+      const type = buf.toString('ascii', offset + 4, offset + 8);
+      if (type === 'tRNS' && (colorType === 0 || colorType === 2 || colorType === 3)) {
+        hasAlpha = true;
+        break;
+      }
+      if (type === 'IDAT' || type === 'IEND') break;
+      // 块长度异常时停止，避免越界读。
+      if (length > buf.length) break;
+      offset += 12 + length;
+    }
+    return { format: 'png', width, height, hasAlpha, bitDepth };
   }
 
   // ---- JPEG ----
@@ -105,6 +120,7 @@ export function readImageHeader(buf) {
       const bits = buf.readUInt32LE(21);
       const width = 1 + (bits & 0x3fff);
       const height = 1 + ((bits >> 14) & 0x3fff);
+      if (!width || !height) return null;
       // 无损格式的第 28 位表示是否带 alpha。
       return { format: 'webp', width, height, hasAlpha: ((bits >> 28) & 1) === 1, bitDepth: 8 };
     }
@@ -114,6 +130,28 @@ export function readImageHeader(buf) {
 
 function finding(level, code, title, detail, fix = '') {
   return { level, code, title, detail, fix };
+}
+
+/**
+ * 只读文件头，绝不把几十 MB 的图片整个读进内存。
+ * 先取 1 MB（覆盖绝大多数 EXIF / ICC / 调色板），仍解析不出再退到 4 MB。
+ */
+async function readHeaderProbe(path, fileSize) {
+  const readAtMost = async (cap) => {
+    const handle = await open(path, 'r');
+    try {
+      const buf = Buffer.alloc(Math.min(cap, fileSize));
+      const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+      return buf.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+  };
+  const first = await readAtMost(1024 * 1024);
+  const header = readImageHeader(first);
+  if (header) return header;
+  if (fileSize > first.length) return readImageHeader(await readAtMost(4 * 1024 * 1024));
+  return null;
 }
 
 /**
@@ -138,13 +176,33 @@ export async function inspectImageFile(path, { preset = '1.5k' } = {}) {
   if (info.size === 0) {
     throw new AppError(ERROR_CODES.IMAGE_INVALID, '图片是空文件（0 字节）', { hint: DEFAULT_IMG_HINT });
   }
-  const handle = await readFile(path);
-  const header = readImageHeader(handle.subarray(0, 4096)) || readImageHeader(handle);
+  if (info.size > LIMITS.uploadImage) {
+    throw new AppError(
+      ERROR_CODES.IMAGE_TOO_LARGE,
+      `图片 ${(info.size / 1024 ** 2).toFixed(1)} MB，超过 ${(LIMITS.uploadImage / 1024 ** 2).toFixed(0)} MB 上限`,
+      { hint: '先缩放到 2048 px 以内再导入；转网格用不到这么大的原图。' },
+    );
+  }
+  const header = await readHeaderProbe(path, info.size);
   if (!header) {
     throw new AppError(
       ERROR_CODES.IMAGE_INVALID,
       `无法解析图片头，文件可能不是真正的 ${extname(path).slice(1).toUpperCase()}。`,
       { hint: '用画图 / Photoshop 重新导出一次，或换一张图。' },
+    );
+  }
+  if (header.width > LIMITS.imageMaxSide || header.height > LIMITS.imageMaxSide) {
+    throw new AppError(
+      ERROR_CODES.IMAGE_TOO_LARGE,
+      `图片尺寸异常（${header.width}×${header.height}）`,
+      { hint: `单边超过 ${LIMITS.imageMaxSide} px 的图多半是拼接图或损坏文件，请先裁剪。` },
+    );
+  }
+  if (header.width * header.height > LIMITS.imageMaxPixels) {
+    throw new AppError(
+      ERROR_CODES.IMAGE_TOO_LARGE,
+      `图片像素过多（${header.width}×${header.height}）`,
+      { hint: `超过 ${(LIMITS.imageMaxPixels / 1e6).toFixed(0)} MP 的图无法有效转网格，请先降低分辨率。` },
     );
   }
 
@@ -482,6 +540,14 @@ function vlmBase(config = {}) {
   return /\/v\d+$/.test(raw) ? raw : `${raw}/v1`;
 }
 
+function vlmHeaders(config = {}, { json = false } = {}) {
+  const headers = { Accept: 'application/json' };
+  if (json) headers['Content-Type'] = 'application/json';
+  const key = String(config.vlmApiKey || '').trim();
+  if (key) headers.Authorization = `Bearer ${key}`;
+  return headers;
+}
+
 function classifyNetError(err) {
   const text = String(err?.message || err || '');
   if (/abort|timeout|超时/i.test(text)) return { code: ERROR_CODES.VLM_OFFLINE, message: '视觉模型响应超时' };
@@ -515,7 +581,7 @@ export async function vlmStatus(config = {}, { timeoutMs = 1800 } = {}) {
   try {
     const res = await fetch(`${endpoint}/models`, {
       signal: AbortSignal.timeout(timeoutMs),
-      headers: { Accept: 'application/json' },
+      headers: vlmHeaders(config),
     });
     if (!res.ok) {
       return {
@@ -534,15 +600,18 @@ export async function vlmStatus(config = {}, { timeoutMs = 1800 } = {}) {
       .filter(Boolean);
     const preferred = String(config.vlmModel || '').trim();
     const vision = models.find((m) => /vl|vision|llava|moondream|minicpm|gemma3|qwen2\.5vl|pixtral|internvl/i.test(m));
-    const model = preferred && models.includes(preferred) ? preferred : vision || preferred || models[0] || '';
+    // 用户显式填写的模型优先，即使服务端没有在 /models 里列出它；有些
+    // 推理服务会隐藏模型列表，强制回退会让「明明能用」变成「没有模型」。
+    const model = preferred || vision || models[0] || '';
     return {
       available: true,
       endpoint,
       models: models.slice(0, 40),
       model,
-      visionLikely: Boolean(vision || preferred),
+      visionLikely: Boolean(vision || preferred || /vl|vision|llava|minicpm|pixtral|internvl/i.test(model)),
       ms: Date.now() - startedAt,
       error: '',
+      auth: Boolean(config.vlmApiKey),
     };
   } catch (err) {
     const net = classifyNetError(err);
@@ -567,9 +636,23 @@ const CAPTION_SYSTEM = [
   '细节：<3–5 个可打印特征，逗号分隔>',
 ].join('\n');
 
-/** 从视觉模型的自由文本里抽出三段结构；抽不到就把原文当主体。 */
+/** 从视觉模型的自由文本里抽出三段结构；先尝试 JSON，再按行解析，抽不到就把原文当主体。 */
 export function parseCaption(text) {
   const raw = String(text || '').trim();
+  // 不少 VL 模型即使要求「三行」也会输出 ```json {...}```。先给它们一次机会。
+  const unfenced = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  if (unfenced.startsWith('{')) {
+    try {
+      const data = JSON.parse(unfenced);
+      const subject = String(data.subject || data.主体 || data.object || '').trim();
+      const style = String(data.style || data.风格 || '').trim();
+      const detailRaw = data.detail ?? data.details ?? data.细节 ?? '';
+      const detail = Array.isArray(detailRaw) ? detailRaw.join('，') : String(detailRaw).trim();
+      if (subject) return { subject: subject.slice(0, 300), style: style.slice(0, 300), detail: detail.slice(0, 400), structured: true };
+    } catch {
+      // 不是合法 JSON：继续走三行解析。
+    }
+  }
   const pick = (label) => {
     const m = new RegExp(`${label}\\s*[:：]\\s*(.+)`).exec(raw);
     return m ? m[1].trim().replace(/[。.;；]$/, '') : '';
@@ -579,9 +662,9 @@ export function parseCaption(text) {
   const detail = pick('细节') || pick('detail');
   if (!subject) {
     const firstLine = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0] || '';
-    return { subject: firstLine.slice(0, 300), style, detail, structured: false };
+    return { subject: firstLine.slice(0, 300), style: style.slice(0, 300), detail: detail.slice(0, 400), structured: false };
   }
-  return { subject, style, detail, structured: true };
+  return { subject: subject.slice(0, 300), style: style.slice(0, 300), detail: detail.slice(0, 400), structured: true };
 }
 
 export async function vlmCaption({ path, config = {}, timeoutMs = LIMITS.vlmTimeoutMs, prompt = '' } = {}) {
@@ -623,7 +706,7 @@ export async function vlmCaption({ path, config = {}, timeoutMs = LIMITS.vlmTime
   try {
     res = await fetch(`${endpoint}/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: vlmHeaders(config, { json: true }),
       signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({
         model,
